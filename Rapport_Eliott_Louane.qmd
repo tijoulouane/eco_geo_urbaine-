@@ -3,3 +3,208 @@ title: "Rapport Eliott et Louane"
 format: html
 editor: visual
 ---
+# Packages 
+
+```{r}
+
+```
+
+# Import des données 
+
+```{r}
+base_DVF <- read.csv("dvf_plus_d01.csv", sep = "|")
+```
+1 fichier par département 
+
+```{r}
+base_DVF_2 <- read.table(
+  "ValeursFoncieres-2025.txt",
+  header = TRUE,
+  sep = "|",
+  dec = ",",
+  stringsAsFactors = FALSE,
+  quote = ""
+)
+```
+
+```{r}
+library(sf)
+
+# Importer les zones de risque
+zones_risque <- st_read(
+  "Floods_Spatial_RiskZone_Template_-_4326_MultiPolygon.gpkg"
+)
+
+# Vérifier les données
+dim(zones_risque)
+names(zones_risque)
+head(zones_risque)
+
+# Vérifier le système de coordonnées
+st_crs(zones_risque)
+```
+
+```{r}
+plot(
+  st_geometry(zones_risque),
+  main = "Territoires à risque important d'inondation"
+)
+```
+```{r}
+zones_risque$nameText
+table(zones_risque$specificHazardType)
+```
+
+
+```{r}
+library(sf)
+
+# Importer les points associés aux zones d'aléa
+zones_alea <- st_read(
+  "Floods_Spatial_HazardArea_Template_-_4326_MultiPoint.gpkg"
+)
+
+# Vérifier l'importation
+dim(zones_alea)
+names(zones_alea)
+head(zones_alea)
+
+# Vérifier le type de géométrie
+st_geometry_type(zones_alea)
+
+# Vérifier le système de coordonnées
+st_crs(zones_alea)
+```
+```{r}
+library(sf)
+
+# Afficher les territoires à risque
+plot(
+  st_geometry(zones_risque),
+  main = "Territoires à risque important d'inondation"
+)
+
+# Afficher les événements ponctuels
+plot(
+  st_geometry(zones_alea),
+  main = "Événements historiques liés aux inondations"
+)
+```
+
+```{r}
+plot(
+  st_geometry(zones_risque),
+  col = "lightblue",
+  main = "Territoires à risque et événements historiques"
+)
+
+plot(
+  st_geometry(zones_alea),
+  add = TRUE,
+  pch = 16,
+  col = "red"
+)
+```
+
+# Commencement 
+
+```{r}
+
+library(sf)
+
+# 1. Examiner la base DVF classique
+names(base_DVF_2)
+head(base_DVF_2[, c(
+  "Valeur.fonciere",
+  "Date.mutation",
+  "Type.local",
+  "Surface.reelle.bati",
+  "Code.departement",
+  "Code.commune"
+)])
+
+# 2. Examiner la base DVF+ qui contient des coordonnées
+names(base_DVF)
+
+# Vérifier si DVF+ est une couche géographique sf
+class(base_DVF)
+
+# Vérifier son système de coordonnées si c'est une couche sf
+if (inherits(base_DVF, "sf")) {
+  st_crs(base_DVF)
+}
+
+# 3. Vérifier les coordonnées des TRI
+st_crs(zones_risque)
+st_bbox(zones_risque)
+
+```
+
+```{r}
+
+# Vérifier le type et les valeurs des coordonnées
+str(base_DVF[, c("geompar_x", "geompar_y")])
+
+summary(base_DVF$geompar_x)
+summary(base_DVF$geompar_y)
+
+# Nombre de coordonnées manquantes
+sum(is.na(base_DVF$geompar_x))
+sum(is.na(base_DVF$geompar_y))
+
+# Quelques observations
+head(base_DVF[, c(
+  "valeurfonc", "datemut", "coddep",
+  "libtypbien", "geompar_x", "geompar_y"
+)])
+
+```
+
+
+```{r}
+
+# 1. Examiner les départements présents
+table(base_DVF$coddep, useNA = "ifany")
+
+# 2. Vérifier les types de biens
+table(base_DVF$libtypbien, useNA = "ifany")
+
+# 3. Créer une couche sf à partir des coordonnées
+library(sf)
+
+dvf_geo <- base_DVF[
+  !is.na(base_DVF$geompar_x) &
+  !is.na(base_DVF$geompar_y), 
+]
+
+dvf_geo <- st_as_sf(
+  dvf_geo,
+  coords = c("geompar_x", "geompar_y"),
+  crs = 2154,
+  remove = FALSE
+)
+
+# 4. Examiner la couverture géographique
+st_crs(dvf_geo)
+st_bbox(dvf_geo)
+
+```
+
+
+```{r}
+# Répartition des départements
+sort(table(base_DVF$coddep), decreasing = TRUE)
+
+# Années présentes
+table(base_DVF$anneemut, useNA = "ifany")
+
+# Dates des transactions
+range(base_DVF$datemut, na.rm = TRUE)
+
+# Quelques identifiants de mutations
+head(base_DVF[, c(
+  "idmutation", "datemut", "coddep",
+  "valeurfonc", "libtypbien"
+)])
+```
+
