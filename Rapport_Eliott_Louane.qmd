@@ -6,7 +6,7 @@ editor: visual
 # Packages 
 
 ```{r}
-
+library(sf)
 ```
 
 # Import des données 
@@ -28,7 +28,7 @@ base_DVF_2 <- read.table(
 ```
 
 ```{r}
-library(sf)
+
 
 # Importer les zones de risque
 zones_risque <- st_read(
@@ -109,8 +109,6 @@ plot(
 # Commencement 
 
 ```{r}
-
-library(sf)
 
 # 1. Examiner la base DVF classique
 names(base_DVF_2)
