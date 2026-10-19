@@ -11,11 +11,15 @@ library(sf)
 
 # Import des données 
 
+##  Base de donées DVF 
+### Base mieux mais 1 fichier pr dep 
+
 ```{r}
 base_DVF <- read.csv("dvf_plus_d01.csv", sep = "|")
 ```
-1 fichier par département 
+1 fichier par département mais la base est mieux les variables sont mieux 
 
+### Base DVF national mais moins de varibales 
 ```{r}
 base_DVF_2 <- read.table(
   "ValeursFoncieres-2025.txt",
@@ -23,17 +27,14 @@ base_DVF_2 <- read.table(
   sep = "|",
   dec = ",",
   stringsAsFactors = FALSE,
-  quote = ""
-)
+  quote = "")
 ```
 
+## Base de données zone de risque
 ```{r}
-
-
 # Importer les zones de risque
 zones_risque <- st_read(
-  "Floods_Spatial_RiskZone_Template_-_4326_MultiPolygon.gpkg"
-)
+  "Floods_Spatial_RiskZone_Template_-_4326_MultiPolygon.gpkg")
 
 # Vérifier les données
 dim(zones_risque)
@@ -47,22 +48,19 @@ st_crs(zones_risque)
 ```{r}
 plot(
   st_geometry(zones_risque),
-  main = "Territoires à risque important d'inondation"
-)
+  main = "Territoires à risque important d'inondation")
 ```
+
 ```{r}
 zones_risque$nameText
 table(zones_risque$specificHazardType)
 ```
 
-
+## Base de données zone aléas sert a rien ?? 
 ```{r}
-library(sf)
-
 # Importer les points associés aux zones d'aléa
 zones_alea <- st_read(
-  "Floods_Spatial_HazardArea_Template_-_4326_MultiPoint.gpkg"
-)
+  "Floods_Spatial_HazardArea_Template_-_4326_MultiPoint.gpkg")
 
 # Vérifier l'importation
 dim(zones_alea)
@@ -75,20 +73,19 @@ st_geometry_type(zones_alea)
 # Vérifier le système de coordonnées
 st_crs(zones_alea)
 ```
+
+# Visualisation zone risque 
 ```{r}
-library(sf)
 
 # Afficher les territoires à risque
 plot(
   st_geometry(zones_risque),
-  main = "Territoires à risque important d'inondation"
-)
+  main = "Territoires à risque important d'inondation")
 
 # Afficher les événements ponctuels
 plot(
   st_geometry(zones_alea),
-  main = "Événements historiques liés aux inondations"
-)
+  main = "Événements historiques liés aux inondations")
 ```
 
 ```{r}
@@ -105,6 +102,7 @@ plot(
   col = "red"
 )
 ```
+
 
 # Commencement 
 
