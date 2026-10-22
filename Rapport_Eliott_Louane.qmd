@@ -3,39 +3,57 @@ title: "Rapport Eliott et Louane"
 format: html
 editor: visual
 ---
-# Packages 
+# 1) Import Packages 
 
 ```{r}
 library(sf)
+library(data.table)
 ```
 
-# Import des données 
-
-##  Base de donées DVF 
-### Base mieux mais 1 fichier pr dep 
+# 2) Import des données 
+## 2.1 DVF Pays de la Loire 
 
 ```{r}
-base_DVF <- read.csv("dvf_plus_d01.csv", sep = "|")
-```
-1 fichier par département mais la base est mieux les variables sont mieux 
+# Les cinq départements des Pays de la Loire
+departements <- c("44", "49", "53", "72", "85")
 
-### Base DVF national mais moins de varibales 
+# Construire la liste des fichiers
+fichiers <- file.path(
+  "DVF",
+  paste0("dvf_plus_d", departements, ".csv")
+)
+
+# Vérifier que tous les fichiers existent
+file.exists(fichiers)
+
+# Importer et réunir les cinq départements
+base_DVF <- rbindlist(
+  lapply(fichiers, function(f) {
+    fread(f, sep = "|", showProgress = TRUE)
+  }),
+  fill = TRUE)
+```
+
+### 2.1.1 Vérification de l'import 
+
 ```{r}
-base_DVF_2 <- read.table(
-  "ValeursFoncieres-2025.txt",
-  header = TRUE,
-  sep = "|",
-  dec = ",",
-  stringsAsFactors = FALSE,
-  quote = "")
+# Vérifier le résultat
+dim(base_DVF)
+sort(unique(base_DVF$coddep))
+unique(base_DVF$coddep)
 ```
 
-## Base de données zone de risque
+## 2.2 Base de données zone de risque 
+
 ```{r}
 # Importer les zones de risque
 zones_risque <- st_read(
   "Floods_Spatial_RiskZone_Template_-_4326_MultiPolygon.gpkg")
+```
 
+### 2.2.1 Vérification de l'import 
+
+```{r}
 # Vérifier les données
 dim(zones_risque)
 names(zones_risque)
@@ -45,18 +63,48 @@ head(zones_risque)
 st_crs(zones_risque)
 ```
 
+### 2.2.2 Visualisation des données plot 
+
 ```{r}
 plot(
   st_geometry(zones_risque),
   main = "Territoires à risque important d'inondation")
 ```
 
+### 2.2.3 Garder seulement le pays de la loire 
+
 ```{r}
-zones_risque$nameText
-table(zones_risque$specificHazardType)
+library(dplyr)
+
+tri_pdl <- c(
+  "FRG_TRI_SAINT_NAZAIRE_PRESQU_ILE_DE_GUERANDE",
+  "FRG_TRI_NANTES",
+  "FRG_NOIRMOUTIER_ST_JEAN_DE_MONTS",
+  "FRG_ANGERS_AUTHION_SAUMUR",
+  "FRG_LE MANS"
+)
+
+zones_risque_pdl <- zones_risque %>%
+  filter(inspireIdLocalId %in% tri_pdl)
+
+# Vérifications
+dim(zones_risque_pdl)
+unique(zones_risque_pdl$inspireIdLocalId)
 ```
 
-## Base de données zone aléas sert a rien ?? 
+```{r}
+library(mapview)
+mapview(zones_risque)
+```
+
+```{r}
+mapview(zones_risque_pdl)
+```
+
+
+
+
+## Base de données zone aléas sert a rien
 ```{r}
 # Importer les points associés aux zones d'aléa
 zones_alea <- st_read(
@@ -76,17 +124,47 @@ st_crs(zones_alea)
 
 # Visualisation zone risque 
 ```{r}
-
-# Afficher les territoires à risque
-plot(
-  st_geometry(zones_risque),
-  main = "Territoires à risque important d'inondation")
-
-# Afficher les événements ponctuels
-plot(
-  st_geometry(zones_alea),
-  main = "Événements historiques liés aux inondations")
+mapview(zones_alea)
 ```
+
+```{r}
+61 64 65 
+```
+
+
+## Base PPRI 
+
+```{r}
+ library(sf)
+
+zones_inondables <- st_read("zone/L_AZI_HORSPPRI_S_049.shp")
+```
+
+
+
+```{r}
+# Afficher les premières lignes
+head(zones_inondables)
+
+# Nombre de zones
+nrow(zones_inondables)
+
+# Noms des variables
+names(zones_inondables)
+
+# Système de coordonnées
+st_crs(zones_inondables)
+```
+
+
+
+```{r}
+mapview(zones_inondables)
+```
+
+
+
+
 
 ```{r}
 plot(
