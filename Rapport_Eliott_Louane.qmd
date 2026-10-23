@@ -3,15 +3,17 @@ title: "Rapport Eliott et Louane"
 format: html
 editor: visual
 ---
-# 1) Import Packages 
+
+# 1) Import Packages
 
 ```{r}
 library(sf)
 library(data.table)
 ```
 
-# 2) Import des données 
-## 2.1 DVF Pays de la Loire 
+# 2) Import des données
+
+## 2.1 DVF Pays de la Loire
 
 ```{r}
 # Les cinq départements des Pays de la Loire
@@ -34,7 +36,7 @@ base_DVF <- rbindlist(
   fill = TRUE)
 ```
 
-### 2.1.1 Vérification de l'import 
+### 2.1.1 Vérification de l'import
 
 ```{r}
 # Vérifier le résultat
@@ -43,7 +45,7 @@ sort(unique(base_DVF$coddep))
 unique(base_DVF$coddep)
 ```
 
-## 2.2 Base de données zone de risque 
+## 2.2 Base de données zone de risque
 
 ```{r}
 # Importer les zones de risque
@@ -51,7 +53,7 @@ zones_risque <- st_read(
   "Floods_Spatial_RiskZone_Template_-_4326_MultiPolygon.gpkg")
 ```
 
-### 2.2.1 Vérification de l'import 
+### 2.2.1 Vérification de l'import
 
 ```{r}
 # Vérifier les données
@@ -63,7 +65,7 @@ head(zones_risque)
 st_crs(zones_risque)
 ```
 
-### 2.2.2 Visualisation des données plot 
+### 2.2.2 Visualisation des données plot
 
 ```{r}
 plot(
@@ -71,7 +73,7 @@ plot(
   main = "Territoires à risque important d'inondation")
 ```
 
-### 2.2.3 Garder seulement le pays de la loire 
+### 2.2.3 Garder seulement le pays de la loire
 
 ```{r}
 library(dplyr)
@@ -101,10 +103,8 @@ mapview(zones_risque)
 mapview(zones_risque_pdl)
 ```
 
-
-
-
 ## Base de données zone aléas sert a rien
+
 ```{r}
 # Importer les points associés aux zones d'aléa
 zones_alea <- st_read(
@@ -122,7 +122,8 @@ st_geometry_type(zones_alea)
 st_crs(zones_alea)
 ```
 
-# Visualisation zone risque 
+# Visualisation zone risque
+
 ```{r}
 mapview(zones_alea)
 ```
@@ -131,16 +132,13 @@ mapview(zones_alea)
 61 64 65 
 ```
 
-
-## Base PPRI 
+## Base PPRI
 
 ```{r}
  library(sf)
 
 zones_inondables <- st_read("zone/L_AZI_HORSPPRI_S_049.shp")
 ```
-
-
 
 ```{r}
 # Afficher les premières lignes
@@ -156,15 +154,9 @@ names(zones_inondables)
 st_crs(zones_inondables)
 ```
 
-
-
 ```{r}
 mapview(zones_inondables)
 ```
-
-
-
-
 
 ```{r}
 plot(
@@ -181,8 +173,7 @@ plot(
 )
 ```
 
-
-# Commencement 
+# Commencement
 
 ```{r}
 
@@ -234,7 +225,6 @@ head(base_DVF[, c(
 
 ```
 
-
 ```{r}
 
 # 1. Examiner les départements présents
@@ -264,7 +254,6 @@ st_bbox(dvf_geo)
 
 ```
 
-
 ```{r}
 # Répartition des départements
 sort(table(base_DVF$coddep), decreasing = TRUE)
@@ -280,5 +269,301 @@ head(base_DVF[, c(
   "idmutation", "datemut", "coddep",
   "valeurfonc", "libtypbien"
 )])
+```
+
+# Test
+
+```{r}
+
+library(dplyr)
+library(sf)
+library(lubridate)
+library(lmtest)
+library(sandwich)
+
+# Sélection des maisons et appartements
+dvf <- base_DVF %>%
+  filter(
+    libtypbien %in% c(
+      "UNE MAISON",
+      "DES MAISONS",
+      "MAISON - INDETERMINEE",
+      "UN APPARTEMENT",
+      "APPARTEMENT",
+      "DEUX APPARTEMENTS"
+    ),
+    !is.na(valeurfonc),
+    valeurfonc > 0,
+    !is.na(geompar_x),
+    !is.na(geompar_y)
+  ) %>%
+  mutate(
+    surface = case_when(
+      libtypbien %in% c(
+        "UNE MAISON",
+        "DES MAISONS",
+        "MAISON - INDETERMINEE"
+      ) & !is.na(sbatmai) & sbatmai > 0 ~
+        as.numeric(sbatmai),
+
+      libtypbien %in% c(
+        "UN APPARTEMENT",
+        "APPARTEMENT",
+        "DEUX APPARTEMENTS"
+      ) & !is.na(sbatapt) & sbatapt > 0 ~
+        as.numeric(sbatapt),
+
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  filter(
+    !is.na(surface),
+    is.finite(surface),
+    surface > 0
+  )
+
+cat("Nombre de transactions retenues :", nrow(dvf), "\n")
+print(table(dvf$libtypbien))
+
+```
+
+```{r}
+
+dvf_sf <- st_as_sf(
+  dvf,
+  coords = c("geompar_x", "geompar_y"),
+  crs = 2154,
+  remove = FALSE
+)
+
+# Vérifier le nombre de points
+cat("Nombre de points géographiques :", nrow(dvf_sf), "\n")
+
+# Vérifier le système de coordonnées
+print(st_crs(dvf_sf))
+print(st_crs(zones_inondables))
+
+```
+
+```{r}
+
+# Harmoniser les systèmes de coordonnées
+zones_inondables <- st_transform(
+  zones_inondables,
+  st_crs(dvf_sf)
+)
+
+# Corriger les éventuelles géométries invalides
+zones_inondables <- st_make_valid(zones_inondables)
+
+# Identifier les transactions qui intersectent une zone inondable
+intersections <- st_intersects(
+  dvf_sf,
+  zones_inondables
+)
+
+dvf_sf$inondable <- as.integer(lengths(intersections) > 0)
+
+# Vérifier la variable d'exposition
+print(table(dvf_sf$inondable, useNA = "ifany"))
+
+# Part des transactions exposées
+print(prop.table(table(dvf_sf$inondable)) * 100)
+
+```
+
+```{r}
+
+# Extraire l'année de mutation
+if (inherits(dvf_sf$datemut, "Date") ||
+    inherits(dvf_sf$datemut, "POSIXt")) {
+
+  dvf_sf$annee <- lubridate::year(dvf_sf$datemut)
+
+} else {
+
+  dvf_sf$annee <- suppressWarnings(
+    as.integer(substr(as.character(dvf_sf$datemut), 1, 4))
+  )
+}
+
+# Créer les variables du modèle
+dvf_reg <- dvf_sf %>%
+  mutate(
+    log_prix = log(as.numeric(valeurfonc)),
+    log_surface = log(surface),
+    type_bien = factor(libtypbien),
+    commune = factor(l_codinsee),
+    annee = factor(annee)
+  ) %>%
+  filter(
+    is.finite(log_prix),
+    is.finite(log_surface),
+    !is.na(type_bien),
+    !is.na(commune),
+    !is.na(annee),
+    !is.na(inondable)
+  ) %>%
+  droplevels()
+
+# Vérifications
+cat("Nombre d'observations pour les modèles :", nrow(dvf_reg), "\n")
+cat("Nombre de communes :", nlevels(dvf_reg$commune), "\n")
+
+print(table(dvf_reg$type_bien))
+print(table(dvf_reg$annee))
+print(table(dvf_reg$inondable, useNA = "ifany"))
+
+```
+
+```{r}
+
+modele1 <- lm(
+  log_prix ~ inondable + log_surface + type_bien + annee,
+  data = dvf_reg
+)
+
+summary(modele1)
+
+# Erreurs-types robustes HC1
+resultat1 <- lmtest::coeftest(
+  modele1,
+  vcov. = sandwich::vcovHC(modele1, type = "HC1")
+)
+
+print(resultat1)
+
+```
+
+```{r}
+
+# Modèle 1
+beta1 <- coef(modele1)["inondable"]
+pvalue1 <- resultat1["inondable", "Pr(>|t|)"]
+
+cat("Modèle 1\n")
+cat("Coefficient :", beta1, "\n")
+cat("Écart de prix estimé (%) :",
+    round(100 * (exp(beta1) - 1), 2), "%\n")
+cat("p-value :", pvalue1, "\n")
+
+
+
+```
+Le coefficient de la variable inondable est de −0,399. Son signe négatif indique que les transactions situées dans les zones recensées comme inondables présentent des prix estimés plus faibles, toutes choses égales par ailleurs selon les variables incluses dans ce modèle.
+
+C’est un point essentiel : le coefficient est estimé à partir de seulement 217 transactions exposées, contre plus de 669 000 autres. Le résultat peut être sensible à quelques transactions atypiques ou à des erreurs de géolocalisation.
+
+Le signe est cohérent avec l’hypothèse étudiée : les biens exposés semblent se vendre moins cher.
+
+
+
+Le résultat est statistiquement significatif dans le premier modèle, même avec des erreurs-types robustes HC1.
+
+
+
+La taille de l’effet est à prendre avec beaucoup de précautions, compte tenu du faible nombre de transactions exposées et de la couverture limitée de la couche spatiale.
+
+
+
+Le premier modèle n’inclut pas d’effets fixes par commune. Le deuxième modèle, qui les ajoute, est important pour vérifier si l’association subsiste lorsqu’on tient compte des différences de prix entre communes.
+
+```{r}
+# Nombre de transactions exposées par année
+dvf_reg %>%
+  st_drop_geometry() %>%
+  filter(inondable == 1) %>%
+  count(annee, sort = TRUE)
+
+# Nombre de transactions exposées par commune
+dvf_reg %>%
+  st_drop_geometry() %>%
+  filter(inondable == 1) %>%
+  count(commune, sort = TRUE)
+```
+Par année, les transactions sont présentes sur toute la période 2014–2025, avec un maximum de 29 en 2021 et un minimum de 8 en 2015. L’effet estimé ne repose donc pas sur une seule année.
+
+Par commune, la répartition est plus concentrée : les communes 49054 et 49292 regroupent respectivement 27 et 26 transactions exposées. Il faut toutefois vérifier les codes correspondant à ces communes et examiner si les transactions exposées sont comparables aux autres ventes.
+
+```{r}
+
+library(sf)
+library(dplyr)
+library(mapview)
+
+# 1. Préparer les transactions
+dvf_carte <- dvf_sf %>%
+  filter(
+    !is.na(valeurfonc),
+    valeurfonc > 0,
+    !is.na(inondable)
+  ) %>%
+  mutate(
+    prix_m2 = valeurfonc / surface,
+    exposition = if_else(
+      inondable == 1,
+      "Zone inondable recensée",
+      "Hors zone recensée"
+    )
+  ) %>%
+  filter(is.finite(prix_m2), prix_m2 > 0)
+
+# 2. Vérifier les systèmes de coordonnées
+zones_carte <- st_transform(
+  zones_inondables,
+  st_crs(dvf_carte)
+)
+
+# 3. Limiter les prix extrêmes pour améliorer la visualisation
+limite_prix <- quantile(
+  dvf_carte$prix_m2,
+  0.99,
+  na.rm = TRUE
+)
+
+dvf_carte <- dvf_carte %>%
+  mutate(
+    prix_m2_carte = pmin(prix_m2, limite_prix)
+  )
+
+# 4. Afficher les transactions avec une couleur selon le prix au m²
+
+# Préparer les informations affichées au clic
+dvf_carte$popup_info <- paste0(
+  "<b>Prix :</b> ", round(dvf_carte$valeurfonc, 0), " €",
+  "<br><b>Surface :</b> ", round(dvf_carte$surface, 1), " m²",
+  "<br><b>Prix au m² :</b> ", round(dvf_carte$prix_m2, 0), " €/m²",
+  "<br><b>Type :</b> ", dvf_carte$libtypbien,
+  "<br><b>Date :</b> ", dvf_carte$datemut,
+  "<br><b>Zone inondable :</b> ", dvf_carte$inondable
+)
+
+# Carte des prix
+carte_prix <- mapview(
+  dvf_carte,
+  zcol = "prix_m2_carte",
+  col.regions = colorRampPalette(
+    c("#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c")
+  )(100),
+  cex = 2,
+  alpha.regions = 0.8,
+  layer.name = "Prix au m² (€)",
+  popup = "popup_info"
+)
+
+# Carte des zones inondables
+carte_zones <- mapview(
+  zones_carte,
+  col.regions = "#3182bd",
+  alpha.regions = 0.35,
+  color = "#08519c",
+  lwd = 2,
+  layer.name = "Zones inondables"
+)
+
+# Superposer les couches
+carte_prix + carte_zones
+
+
 ```
 
