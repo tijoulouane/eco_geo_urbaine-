@@ -1,0 +1,379 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+# Packages
+
+```{r}
+library(sf)
+library(tidyverse)
+```
+
+# Import des données
+
+## Base de donées DVF
+
+```{r}
+#Paramètres
+annees <- 2022:2025
+dept   <- "44"
+
+#fichier DVF géolocalisé 
+url_dvf <- function(annee, dept) {
+  sprintf("https://files.data.gouv.fr/geo-dvf/latest/csv/%d/departements/%s.csv.gz",
+          annee, dept)
+}
+
+# Téléchargement et empilement
+lire_annee <- function(annee) {
+  message("Chargement de ", annee, "...")
+  tryCatch(
+    read_csv(url_dvf(annee, dept),
+             col_types = cols(.default = col_character()),
+             show_col_types = FALSE) |>
+      mutate(annee = annee),
+    error = function(e) {
+      warning("Année ", annee, " indisponible : ", conditionMessage(e))
+      NULL
+    }
+  )
+}
+
+dvf_brut <- map(annees, lire_annee) |> list_rbind()
+```
+### analyse et nettoyage de la base
+```{r, catégorie des données}
+summary(dvf_brut)
+
+# conversion des types
+dvf <- dvf_brut |>
+  mutate(
+    date_mutation            = as.Date(date_mutation),
+    valeur_fonciere          = as.numeric(valeur_fonciere),
+    surface_reelle_bati      = as.numeric(surface_reelle_bati),
+    nombre_pieces_principales = as.numeric(nombre_pieces_principales),
+    surface_terrain          = as.numeric(surface_terrain),
+    longitude                = as.numeric(longitude),
+    latitude                 = as.numeric(latitude)
+  )
+```
+```{r}
+# ventes de maisons/ appartements uniquement
+dvf_clean <- dvf |>
+  filter(nature_mutation == "Vente",
+         type_local %in% c("Maison", "Appartement"))
+```
+```{r}
+# problème des doublons
+mutations_simples <- dvf_clean |>
+  count(id_mutation) |>
+  filter(n == 1) |>
+  pull(id_mutation)
+
+dvf_gardes    <- dvf_clean |> filter(id_mutation %in% mutations_simples)
+dvf_elimines  <- dvf_clean |> filter(!id_mutation %in% mutations_simples)
+
+dvf_clean <- dvf_gardes 
+
+nrow(dvf_gardes); nrow(dvf_elimines)
+n_distinct(dvf_elimines$id_mutation)
+
+dvf_elimines |> count(type_local)
+
+dvf_elimines |>
+  group_by(id_mutation) |>
+  summarise(n_lignes = n(),
+            types = paste(sort(unique(type_local)), collapse = " + "),
+            valeur = first(valeur_fonciere),
+            surface_totale = sum(as.numeric(surface_reelle_bati), na.rm = TRUE)) |>
+  count(types, sort = TRUE)
+```
+on a des maisons qui sont vendus plusieurs fois donc un problème de doublon est présent.
+```{r}
+dvf_elimines |>
+  filter(id_mutation %in% sample(unique(id_mutation[type_local == "Maison"]), 3)) |>
+  select(id_mutation, id_parcelle, type_local, surface_reelle_bati,
+         nombre_lots, surface_terrain,nature_culture, valeur_fonciere)
+
+```
+on regroupe par valeurs identiques. le numéro de lot pour les maisons n'est pas pertinent. il y a plusieurs lignes car parfois il peut être rentré plusieurs fois ou alors un jardin est présent ce qui rajoute une ligne. la valeur foncière et le numéro de parcelle étant identiques on regroupe selon ces critères.
+```{r}
+maisons_regroupees <- dvf_elimines |>
+  filter(type_local == "Maison") |>
+  group_by(id_parcelle, surface_reelle_bati, valeur_fonciere) |>
+  slice_max(surface_terrain, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+dvf_clean <- bind_rows(dvf_gardes, maisons_regroupees)
+
+# vérification du reste
+dvf_elimines <- dvf_elimines |>
+  filter(!id_mutation %in% maisons_regroupees$id_mutation)
+
+nrow(dvf_elimines)
+n_distinct(dvf_reste$id_mutation)
+dvf_elimines %>%  count(type_local)
+# plus que 16 maisons et le cas des appartements
+```
+
+
+
+
+
+```{r}
+# b) Garder les mutations avec UN seul local (évite de répartir un prix entre plusieurs biens)
+mutations_simples <- dvf_clean |>
+  count(id_mutation) |>
+  filter(n == 1) |>
+  pull(id_mutation)
+
+dvf_clean <- dvf_clean |>
+  filter(id_mutation %in% mutations_simples)
+
+# c) Valeurs cohérentes et géolocalisation présente
+#A REFAIRE LES ESTIMATIONS DESSUS POUR V2RIFIER LA PERTINENCE DES FILTRAGES
+dvf_clean <- dvf_clean |>
+  filter(!is.na(longitude), !is.na(latitude),
+         !is.na(valeur_fonciere), valeur_fonciere > 10000,
+         !is.na(surface_reelle_bati), surface_reelle_bati >= 9,
+         surface_reelle_bati <= 500) |>
+  mutate(prix_m2 = valeur_fonciere / surface_reelle_bati) |>
+  filter(prix_m2 >= 500, prix_m2 <= 15000) |>   # seuils à ajuster/justifier
+  mutate(log_prix_m2 = log(prix_m2),
+         annee_vente = year(date_mutation))
+
+# ---- 4. Objet spatial en Lambert-93 ----
+dvf_sf <- dvf_clean |>
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  st_transform(2154)
+
+# ---- 5. Vérifications ----
+cat("Observations brutes   :", nrow(dvf_brut), "\n")
+cat("Observations retenues :", nrow(dvf_sf), "\n")
+dvf_sf |> st_drop_geometry() |> count(annee_vente, type_local)
+summary(dvf_sf$prix_m2)
+
+# ---- 6. Sauvegarde (évite de re-télécharger) ----
+dir.create("data", showWarnings = FALSE)
+saveRDS(dvf_sf, "data/dvf_44_2022_2025.rds")
+st_write(dvf_sf, "data/dvf_44_2022_2025.gpkg",delete_dsn=TRUE)
+```
+
+## base de données IGN
+```{r}
+# ---- Fonction générique : lecture WFS paginée (GeoJSON, Lambert-93) ----
+wfs_get <- function(base_url, layer, bbox = NULL, page = 5000, max_pages = 50) {
+  out <- list()
+  for (i in 0:(max_pages - 1)) {
+    url <- paste0(base_url,
+      "?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature",
+      "&TYPENAMES=", layer,
+      "&OUTPUTFORMAT=application/json&SRSNAME=EPSG:2154",
+      "&COUNT=", page, "&STARTINDEX=", i * page,
+      if (!is.null(bbox)) paste0("&BBOX=", paste(bbox, collapse = ","), ",EPSG:2154") else "")
+    chunk <- tryCatch(read_sf(url), error = function(e) NULL)
+    if (is.null(chunk) || nrow(chunk) == 0) break
+
+    # Uniformise les types : tout en texte sauf la géométrie
+    g <- attr(chunk, "sf_column")
+    chunk <- chunk |> mutate(across(-all_of(g), as.character))
+
+    out[[i + 1]] <- chunk
+    if (nrow(chunk) < page) break
+  }
+  bind_rows(out) |> st_transform(2154)
+}
+
+ign <- "https://data.geopf.fr/wfs/ows"
+
+# Emprise approximative de la Loire-Atlantique en Lambert-93 (xmin, ymin, xmax, ymax)
+bbox_44 <- c(270000, 6640000, 420000, 6780000)
+
+# ---- 1. Communes (Admin Express) ----
+communes <- wfs_get(ign, "ADMINEXPRESS-COG.LATEST:commune", bbox = bbox_44)
+names(communes)   # repère le champ du code INSEE (souvent "code_insee")
+communes_44 <- communes |> filter(str_starts(code_insee, "44"))
+dep_44 <- st_union(communes_44)
+saveRDS(communes_44, "data/communes_44.rds")
+
+# ---- 2. Hydrographie (openstreetmap) ----
+dir.create("data/osm", recursive = TRUE, showWarnings = FALSE)
+options(timeout = 600)   # téléchargement long : on évite le timeout par défaut
+
+if (!file.exists("data/osm/pdl.zip")) {
+  download.file(
+    "https://download.geofabrik.de/europe/france/pays-de-la-loire-latest-free.shp.zip",
+    destfile = "data/osm/pdl.zip", mode = "wb")
+  unzip("data/osm/pdl.zip", exdir = "data/osm")}
+
+
+list.files("data/osm", pattern = "water")   # vérifie les noms des fichiers
+
+# Cours d'eau (lignes) : on garde rivières, ruisseaux et canaux
+cours_eau <- read_sf("data/osm/gis_osm_waterways_free_1.shp") |>
+  filter(fclass %in% c("river", "stream", "canal")) |>
+  st_transform(2154)
+
+# Plans d'eau et grands cours d'eau (polygones : Loire, estuaire, étangs)
+eau_surf <- read_sf("data/osm/gis_osm_water_a_free_1.shp") |>
+  st_transform(2154)
+
+# On garde la Loire-Atlantique (dep_44 vient du script précédent)
+cours_eau <- st_filter(cours_eau, dep_44)
+eau_surf  <- st_filter(eau_surf, dep_44)
+
+saveRDS(cours_eau, "data/cours_eau_44.rds")
+saveRDS(eau_surf,  "data/eau_surf_44.rds")
+```
+
+```{r, TRI nantes}
+f <- list.files("data/tri nantes", pattern = "\\.shp$", full.names = TRUE)
+f
+
+inond_nantes <- read_sf(f) |>
+  st_transform(2154) |>
+  st_make_valid()
+
+# Vérifications
+nrow(inond_nantes)        
+names(inond_nantes)         
+st_bbox(inond_nantes)  
+```
+```{r}
+# ---- a) Zone d'étude : communes touchées par le TRI de Nantes ----
+communes_tri <- communes_44 |> st_filter(inond_nantes)
+zone_etude   <- st_union(communes_tri)
+dvf_zone     <- st_filter(dvf_sf, zone_etude)
+
+# ---- b) Une géométrie par scénario ----
+union_scen <- function(motif) {
+  g <- inond_nantes |> filter(str_detect(str_to_lower(scenario), motif))
+  if (nrow(g) == 0) return(NULL)
+  st_union(g)
+}
+z_fort  <- union_scen("for")
+z_moyen <- union_scen("moy")
+z_faible <- union_scen("fai")
+z_tout  <- st_union(inond_nantes)
+
+dans <- function(pts, zone) {
+  if (is.null(zone)) return(NA)
+  lengths(st_intersects(pts, zone)) > 0
+}
+
+dvf_zone <- dvf_zone |>
+  mutate(
+    dans_zone_inond = dans(geometry, z_tout),
+    dans_fort   = dans(geometry, z_fort),
+    dans_moyen  = dans(geometry, z_moyen),
+    dans_faible = dans(geometry, z_faible)
+  )
+dvf_zone <- dvf_zone |>
+  mutate(niveau = case_when(dans_fort   ~ "fort",
+                            dans_moyen  ~ "moyen",
+                            dans_faible ~ "faible",
+                            TRUE        ~ "hors zone"),
+         niveau = factor(niveau, levels = c("hors zone", "fort", "moyen", "faible")))
+
+
+# ---- c) Distances (en mètres) ----
+# Distance à la zone inondable (0 si dedans)
+dvf_zone$dist_inond <- as.numeric(st_distance(dvf_zone, z_tout))
+
+# Distance à l'eau la plus proche : cours d'eau (lignes) et plans d'eau (polygones)
+dist_plus_proche <- function(pts, cible) {
+  idx <- st_nearest_feature(pts, cible)
+  as.numeric(st_distance(pts, cible[idx, ], by_element = TRUE))
+}
+dvf_zone$dist_cours_eau <- dist_plus_proche(dvf_zone, cours_eau)
+dvf_zone$dist_eau_surf  <- dist_plus_proche(dvf_zone, eau_surf)
+dvf_zone$dist_eau <- pmin(dvf_zone$dist_cours_eau, dvf_zone$dist_eau_surf)
+
+# ---- d) Contrôles ----
+# Distance au centre de Nantes (Place du Commerce approx., en Lambert-93)
+centre <- st_sfc(st_point(c(355500, 6689500)), crs = 2154)
+dvf_zone$dist_centre <- as.numeric(st_distance(dvf_zone, centre))
+
+# ---- e) Vérifications ----
+dvf_zone |> st_drop_geometry() |>
+  summarise(n = n(),
+            dans_zone = sum(dans_zone_inond),
+            part_dans = mean(dans_zone_inond))
+
+dvf_zone |> st_drop_geometry() |>
+  group_by(niveau) |>
+  summarise(n = n(), prix_m2_median = median(prix_m2))
+
+saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
+```
+```{r}
+dvf_zone <- dvf_zone |>
+    mutate(niveau = case_when(dans_fort ~ "fort", dans_moyen ~ "moyen",
+                              dans_faible ~ "faible", TRUE ~ "hors zone"))
+
+table(inond_nantes$scenario)
+dvf_zone |> st_drop_geometry() |> count(dans_fort, dans_moyen, dans_faible)
+
+```
+```{r}
+# Carte 1 : zone d'étude et zones inondables
+ggplot() +
+  geom_sf(data = communes_tri, fill = "grey95", colour = "grey60") +
+  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = .6) +
+  geom_sf(data = eau_surf |> st_filter(zone_etude), fill = "lightblue", colour = NA) +
+  labs(title = "Zone d'étude et surfaces inondables (TRI de Nantes)",
+       caption = "Sources : DREAL PdL 2014, IGN, OSM") +
+  theme_minimal()
+
+# Carte 2 : prix au m² des transactions
+ggplot() +
+  geom_sf(data = communes_tri, fill = NA, colour = "grey70") +
+  geom_sf(data = dvf_zone, aes(colour = prix_m2), size = .4) +
+  scale_colour_viridis_c(trans = "log10", name = "€/m²") +
+  theme_minimal()
+
+# Carte 3 : biens dans / hors zone inondable
+ggplot() +
+  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = .4) +
+  geom_sf(data = dvf_zone, aes(colour = dans_zone_inond), size = .4) +
+  scale_colour_manual(values = c("grey60", "red"), name = "En zone inondable") +
+  theme_minimal()
+```
+
+```{r}
+table(inond_nantes$scenario)
+table(inond_nantes$scenario, inond_nantes$est_ref)
+table(inond_nantes$typ_inond1)
+
+# Surface de chaque polygone, en km², et part de la zone d'étude
+inond_nantes |>
+  mutate(aire_km2 = as.numeric(st_area(geometry)) / 1e6) |>
+  st_drop_geometry() |>
+  select(id_s_inond, scenario, typ_inond, est_ref, aire_km2) |>
+  arrange(desc(aire_km2)) |>
+  print(n = 20)
+
+as.numeric(st_area(zone_etude)) / 1e6   # surface de la zone d'étude en km²
+```
+```{r}
+ggplot() +
+  geom_sf(data = communes_tri, fill = "grey95") +
+  geom_sf(data = inond_nantes, aes(fill = scenario), colour = NA, alpha = .4) +
+  theme_minimal()
+```
+```{r}
+repartition <- dvf_zone |>
+  st_drop_geometry() |>
+  group_by(code_commune, nom_commune) |>
+  summarise(n_total   = n(),
+            n_inond   = sum(dans_zone_inond),
+            part_expo = n_inond / n_total,   # part des biens exposés dans la commune
+            .groups = "drop") |>
+  mutate(part_du_total = n_inond / sum(n_inond),   # poids de la commune parmi les biens exposés
+         part_cumulee  = cumsum(part_du_total[order(-n_inond)])[rank(-n_inond, ties.method = "first")]) |>
+  arrange(desc(n_inond))
+
+print(repartition, n = 30)
+```
+
