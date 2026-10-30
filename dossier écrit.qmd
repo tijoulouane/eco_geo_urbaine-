@@ -8,11 +8,12 @@ editor: visual
 ```{r}
 library(sf)
 library(tidyverse)
+library(EnvStats)
 ```
 
 # Import des données
 
-## Base de donées DVF
+## 1° Base de donées DVF
 
 ```{r}
 #Paramètres
@@ -59,13 +60,52 @@ dvf <- dvf_brut |>
   )
 ```
 ```{r}
-# ventes de maisons/ appartements uniquement
-dvf_clean <- dvf |>
-  filter(nature_mutation == "Vente",
-         type_local %in% c("Maison", "Appartement"))
+unique(dvf$type_local)
+unique(dvf$nature_culture)
+
+nature_ok <- c("sols", NA)
+
+dvf_ventes <- dvf |>
+  filter(nature_mutation == "Vente") |>
+  group_by(id_mutation) |>
+  filter(all(type_local %in% c("Maison", "Appartement", "Dépendance")),
+         all(nature_culture %in% nature_ok)) |>
+  ungroup()
+
+dvf_clean <- dvf_ventes |>
+  filter(type_local %in% c("Maison", "Appartement"))
 ```
+hypothèses que des sols sont en NA (risque de l'inverse aussi)
 ```{r}
-# problème des doublons
+summary(dvf_clean$surface_reelle_bati)
+# présence de toutes petites maisons et de très grandes
+
+dvf_clean |>
+  group_by(type_local) |>
+  summarise(q01 = quantile(surface_reelle_bati, .01, na.rm = TRUE),
+            q50 = median(surface_reelle_bati, na.rm = TRUE),
+            q99 = quantile(surface_reelle_bati, .99, na.rm = TRUE),
+            max = max(surface_reelle_bati, na.rm = TRUE))
+
+```
+seuil de 9m² (selon loi careez)pour les apparts
+seuil de 20m²(lois qui donnent la nécessité d'un permis de construire) pour maison
+
+```{r}
+summary(dvf_clean$valeur_fonciere)
+# présence de prix simboliques (cessions), calcul du m² pour les plus grandes valeurs foncières
+```
+
+```{r}
+dvf_clean <- dvf_clean |>
+  filter(!is.na(longitude), !is.na(latitude),
+         !is.na(valeur_fonciere), valeur_fonciere > 10000,
+         !is.na(surface_reelle_bati),
+         (type_local == "Appartement" & surface_reelle_bati >=9) |
+         (type_local == "Maison"      & surface_reelle_bati >= 20)) 
+```
+### problème des doublons
+```{r}
 mutations_simples <- dvf_clean |>
   count(id_mutation) |>
   filter(n == 1) |>
@@ -85,65 +125,135 @@ dvf_elimines |>
   group_by(id_mutation) |>
   summarise(n_lignes = n(),
             types = paste(sort(unique(type_local)), collapse = " + "),
-            valeur = first(valeur_fonciere),
-            surface_totale = sum(as.numeric(surface_reelle_bati), na.rm = TRUE)) |>
+            valeur = first(valeur_fonciere)) |>
   count(types, sort = TRUE)
 ```
-on a des maisons qui sont vendus plusieurs fois donc un problème de doublon est présent.
 ```{r}
-dvf_elimines |>
-  filter(id_mutation %in% sample(unique(id_mutation[type_local == "Maison"]), 3)) |>
-  select(id_mutation, id_parcelle, type_local, surface_reelle_bati,
-         nombre_lots, surface_terrain,nature_culture, valeur_fonciere)
+ventes_mixtes <- dvf_elimines |>
+  group_by(id_mutation) |>
+  filter(n_distinct(type_local) > 1) |>
+  ungroup() |>
+  arrange(id_mutation)
 
+#View(ventes_mixtes)
+```
+
+on a des maisons qui sont vendus plusieurs fois donc un problème de doublon est présent + des ventes avec plusieurs biens (maisons+appartement) où on ne peut pas discerner la valeur de chaque bien donc on les retire de la base
+```{r}
+dvf_elimines <- dvf_elimines |>
+  group_by(id_mutation) |>
+  filter(n_distinct(type_local) == 1) |>
+  ungroup()
+
+dvf_elimines |>
+  filter(id_mutation %in% sample(unique(id_mutation[type_local == "Maison"]))) |>
+  select(id_mutation, id_parcelle, type_local, surface_reelle_bati,
+         nombre_lots, surface_terrain,nature_culture, valeur_fonciere) #%>% view()
 ```
 on regroupe par valeurs identiques. le numéro de lot pour les maisons n'est pas pertinent. il y a plusieurs lignes car parfois il peut être rentré plusieurs fois ou alors un jardin est présent ce qui rajoute une ligne. la valeur foncière et le numéro de parcelle étant identiques on regroupe selon ces critères.
 ```{r}
 maisons_regroupees <- dvf_elimines |>
   filter(type_local == "Maison") |>
-  group_by(id_parcelle, surface_reelle_bati, valeur_fonciere) |>
+  group_by(id_mutation, id_parcelle, surface_reelle_bati, valeur_fonciere, nombre_pieces_principales) |>
   slice_max(surface_terrain, n = 1, with_ties = FALSE) |>
   ungroup()
 
-dvf_clean <- bind_rows(dvf_gardes, maisons_regroupees)
+maisons_regroupees <- maisons_regroupees |>
+  group_by(id_mutation) |>
+  filter(n() == 1) |>   
+  ungroup()
 
 # vérification du reste
 dvf_elimines <- dvf_elimines |>
   filter(!id_mutation %in% maisons_regroupees$id_mutation)
 
 nrow(dvf_elimines)
-n_distinct(dvf_reste$id_mutation)
 dvf_elimines %>%  count(type_local)
-# plus que 16 maisons et le cas des appartements
+```
+```{r}
+dvf_elimines |>
+  filter(id_mutation %in% sample(unique(id_mutation[type_local == "Maison"]))) |>
+  select(id_mutation, id_parcelle, type_local, surface_reelle_bati,
+         nombre_lots, surface_terrain,nature_culture, valeur_fonciere)
+
+dvf_elimines |>
+  filter(id_mutation %in% sample(unique(id_mutation[type_local == "Appartement"]))) |>
+  select(id_mutation, id_parcelle, type_local, surface_reelle_bati,
+          surface_terrain,nature_culture, valeur_fonciere, lot1_numero) #%>% view()
+```
+
+pour les maison, il s'agit de ventes avec plusieurs maisons/ parcelles pour une seule valeur foncière donc on ne peut pas déterminer correctement s'il s'agit de 2 biens séparés ou un seul, ni la valeur. On les mets de côté.
+
+pour les appartements, il s'agit de ventes en lot la plus part du temps, le seul filtre qu'on peut appliquer est sur la surface batîe (si inférieur à 9 alors on retire la ligne) ce qui permet de conserver uniquement l'appartement (en comptant le garage/annexe dans la surface)
+```{r}
+# lots avec un appart et des annexes
+seuil_annexe <- 9   # m² : en dessous, la ligne est une annexe (même seuil que le filtre de surface)
+
+apparts_annexes <- dvf_elimines |>
+  group_by(id_mutation) |>
+  filter(all(type_local %in% "Appartement")) |>
+  mutate(est_annexe = is.na(surface_reelle_bati) | surface_reelle_bati < seuil_annexe) |>
+  filter(sum(!est_annexe) >= 1,                                             
+         n_distinct(surface_reelle_bati[!est_annexe]) == 1,          
+         n_distinct(lot1_numero[!est_annexe], na.rm = TRUE) <= 1) |>        
+  filter(!est_annexe) |>
+  slice(1) |>                           
+  ungroup() |>
+  select(-est_annexe)
+
+dvf_elimines <- dvf_elimines |>
+  filter(!id_mutation %in% apparts_annexes$id_mutation)
+
+# lots où on n'a que des apparts
+apparts_sols <- dvf_elimines|>
+  group_by(id_mutation) |>
+  filter(all(type_local %in% "Appartement"),
+         all(nature_culture %in% "sols"),
+         all(surface_reelle_bati > 9),
+         n()>=2) |>                              
+  mutate(n_logements     = n(),
+         valeur_totale   = valeur_fonciere,
+         valeur_fonciere = valeur_totale * surface_reelle_bati / sum(surface_reelle_bati)) |>
+  ungroup()
+
+dvf_elimines <- dvf_elimines |>
+  filter(!id_mutation %in% apparts_sols$id_mutation)
+
+nrow(dvf_elimines)
+# plus que 2901 lignes dont 1254 maisons et 1647 apparts
+
+
+dvf_clean <- bind_rows(dvf_gardes, maisons_regroupees, apparts_annexes, apparts_sols)
+```
+
+les lots où on a des jardins ou autres ne sont pas pris en compte, de même lorsque la nature du lot est floue (NA)
+
+### indicateur
+```{r}
+dvf_clean$prix_m2 <- (dvf_clean$valeur_fonciere / dvf_clean$surface_reelle_bati)
+
+summary(dvf_clean$prix_m2)
+boxplot(dvf_clean$prix_m2)
+
+dvf_clean |>
+  arrange(desc(prix_m2)) |>
+  head(15) %>% view()
+
+dvf_clean |>
+  arrange(prix_m2) |>
+  head(15) %>% view()
+```
+on laisse le m2 en l'état pour l'instant, on verra après.
+
+```{r}
+dvf_clean <- dvf_clean |>
+  mutate(log_prix_m2 = log(prix_m2),
+         annee_vente = year(date_mutation))
 ```
 
 
-
-
-
 ```{r}
-# b) Garder les mutations avec UN seul local (évite de répartir un prix entre plusieurs biens)
-mutations_simples <- dvf_clean |>
-  count(id_mutation) |>
-  filter(n == 1) |>
-  pull(id_mutation)
-
-dvf_clean <- dvf_clean |>
-  filter(id_mutation %in% mutations_simples)
-
-# c) Valeurs cohérentes et géolocalisation présente
-#A REFAIRE LES ESTIMATIONS DESSUS POUR V2RIFIER LA PERTINENCE DES FILTRAGES
-dvf_clean <- dvf_clean |>
-  filter(!is.na(longitude), !is.na(latitude),
-         !is.na(valeur_fonciere), valeur_fonciere > 10000,
-         !is.na(surface_reelle_bati), surface_reelle_bati >= 9,
-         surface_reelle_bati <= 500) |>
-  mutate(prix_m2 = valeur_fonciere / surface_reelle_bati) |>
-  filter(prix_m2 >= 500, prix_m2 <= 15000) |>   # seuils à ajuster/justifier
-  mutate(log_prix_m2 = log(prix_m2),
-         annee_vente = year(date_mutation))
-
-# ---- 4. Objet spatial en Lambert-93 ----
+# Objet spatial en Lambert-93
 dvf_sf <- dvf_clean |>
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
   st_transform(2154)
@@ -152,15 +262,17 @@ dvf_sf <- dvf_clean |>
 cat("Observations brutes   :", nrow(dvf_brut), "\n")
 cat("Observations retenues :", nrow(dvf_sf), "\n")
 dvf_sf |> st_drop_geometry() |> count(annee_vente, type_local)
-summary(dvf_sf$prix_m2)
 
-# ---- 6. Sauvegarde (évite de re-télécharger) ----
+```
+### Sauvegarde
+```{r}
 dir.create("data", showWarnings = FALSE)
 saveRDS(dvf_sf, "data/dvf_44_2022_2025.rds")
 st_write(dvf_sf, "data/dvf_44_2022_2025.gpkg",delete_dsn=TRUE)
 ```
 
-## base de données IGN
+
+## 2° Base de données IGN
 ```{r}
 # ---- Fonction générique : lecture WFS paginée (GeoJSON, Lambert-93) ----
 wfs_get <- function(base_url, layer, bbox = NULL, page = 5000, max_pages = 50) {
@@ -192,7 +304,7 @@ bbox_44 <- c(270000, 6640000, 420000, 6780000)
 
 # ---- 1. Communes (Admin Express) ----
 communes <- wfs_get(ign, "ADMINEXPRESS-COG.LATEST:commune", bbox = bbox_44)
-names(communes)   # repère le champ du code INSEE (souvent "code_insee")
+names(communes)   
 communes_44 <- communes |> filter(str_starts(code_insee, "44"))
 dep_44 <- st_union(communes_44)
 saveRDS(communes_44, "data/communes_44.rds")
@@ -219,14 +331,17 @@ cours_eau <- read_sf("data/osm/gis_osm_waterways_free_1.shp") |>
 eau_surf <- read_sf("data/osm/gis_osm_water_a_free_1.shp") |>
   st_transform(2154)
 
-# On garde la Loire-Atlantique (dep_44 vient du script précédent)
+# On garde la Loire-Atlantique
 cours_eau <- st_filter(cours_eau, dep_44)
 eau_surf  <- st_filter(eau_surf, dep_44)
-
+```
+### Sauvegarde
+```{r}
 saveRDS(cours_eau, "data/cours_eau_44.rds")
 saveRDS(eau_surf,  "data/eau_surf_44.rds")
 ```
 
+# Base inondations
 ```{r, TRI nantes}
 f <- list.files("data/tri nantes", pattern = "\\.shp$", full.names = TRUE)
 f
@@ -240,6 +355,7 @@ nrow(inond_nantes)
 names(inond_nantes)         
 st_bbox(inond_nantes)  
 ```
+
 ```{r}
 # ---- a) Zone d'étude : communes touchées par le TRI de Nantes ----
 communes_tri <- communes_44 |> st_filter(inond_nantes)
