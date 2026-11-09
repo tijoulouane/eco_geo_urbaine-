@@ -1,4 +1,6 @@
-.Rproj.user
-.Rhistory
-.RData
-.Ruserdata
+# Tout ignorer
+*
+
+# Sauf le rapport
+!Rapport_Eliott_Louane.qmd
+!dossier écrit.qmd
