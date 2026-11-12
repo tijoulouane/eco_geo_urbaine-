@@ -450,21 +450,16 @@ cat("p-value :", pvalue1, "\n")
 
 
 ```
+
 Le coefficient de la variable inondable est de −0,399. Son signe négatif indique que les transactions situées dans les zones recensées comme inondables présentent des prix estimés plus faibles, toutes choses égales par ailleurs selon les variables incluses dans ce modèle.
 
 C’est un point essentiel : le coefficient est estimé à partir de seulement 217 transactions exposées, contre plus de 669 000 autres. Le résultat peut être sensible à quelques transactions atypiques ou à des erreurs de géolocalisation.
 
 Le signe est cohérent avec l’hypothèse étudiée : les biens exposés semblent se vendre moins cher.
 
-
-
 Le résultat est statistiquement significatif dans le premier modèle, même avec des erreurs-types robustes HC1.
 
-
-
 La taille de l’effet est à prendre avec beaucoup de précautions, compte tenu du faible nombre de transactions exposées et de la couverture limitée de la couche spatiale.
-
-
 
 Le premier modèle n’inclut pas d’effets fixes par commune. Le deuxième modèle, qui les ajoute, est important pour vérifier si l’association subsiste lorsqu’on tient compte des différences de prix entre communes.
 
@@ -481,6 +476,7 @@ dvf_reg %>%
   filter(inondable == 1) %>%
   count(commune, sort = TRUE)
 ```
+
 Par année, les transactions sont présentes sur toute la période 2014–2025, avec un maximum de 29 en 2021 et un minimum de 8 en 2015. L’effet estimé ne repose donc pas sur une seule année.
 
 Par commune, la répartition est plus concentrée : les communes 49054 et 49292 regroupent respectivement 27 et 26 transactions exposées. Il faut toutefois vérifier les codes correspondant à ces communes et examiner si les transactions exposées sont comparables aux autres ventes.
@@ -566,4 +562,3 @@ carte_prix + carte_zones
 
 
 ```
-
