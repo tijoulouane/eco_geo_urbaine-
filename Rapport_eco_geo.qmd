@@ -979,12 +979,9 @@ dvf_zone$dist_centre <- as.numeric(
 )
 ```
 
-### 2.3.6 
+### 2.3.6 Vérifications et statistiques descriptives
 
 ```{r}
-# ------------------------------------------------------------
-# Vérifications et statistiques descriptives
-# ------------------------------------------------------------
 
 # Nombre et proportion de biens en zone inondable
 dvf_zone |>
@@ -1017,12 +1014,9 @@ dvf_zone |>
 saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
 ```
 
-### 2.3.7 
+### 2.3.7 Cartographie des zones inondables
 
 ```{r}
-# ------------------------------------------------------------
-# Cartographie des zones inondables
-# ------------------------------------------------------------
 
 # Carte 1 : zone d'étude et surfaces inondables
 ggplot() +
@@ -1075,12 +1069,9 @@ ggplot() +
 ```
 
 
-### 2.3.8 
+### 2.3.8  Répartition des biens exposés par commune
 
 ```{r}
-# ------------------------------------------------------------
-# Répartition des biens exposés par commune
-# ------------------------------------------------------------
 
 repartition <- dvf_zone |>
   st_drop_geometry() |>
