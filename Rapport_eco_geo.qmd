@@ -10,6 +10,7 @@ editor: visual
 library(sf)
 library(tidyverse)
 library(EnvStats)
+library(fixest)
 ```
 # 2) Import des données 
 ## 2.1 Base de données DVF
@@ -1277,4 +1278,54 @@ ggplot() +
   theme_minimal()
 ```
 
+# 3) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
+
+Création d'une variable combinée pour les effets fixes spatiaux 
+(Quartiers pour Nantes, Communes pour le reste de la métropole)
+
+```{r}
+dvf_zone <- dvf_zone |>
+  mutate(
+    fe_spatial = if_else(code_commune == "44109", as.character(code_iris), as.character(code_commune)),
+    log_surface = log(surface_reelle_bati),
+    log_revenu_median = log(revenu_median_iris),
+    dist_inond_km = dist_inond / 1000,
+    dist_cours_eau_km = dist_cours_eau / 1000,
+    dist_centre_km = dist_centre / 1000
+  )
+
+```
+
+# 4) ESTIMATIONS ÉCONOMÉTRIQUES (Modèles de régression)
+
+```{r}
+
+# --- MODÈLE 1 : Effet moyen de l'exposition binaire ---
+reg_binaire <- feols(
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local + 
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
+    annee_vente + fe_spatial,
+  data = dvf_zone
+)
+
+# --- MODÈLE 2 : Intensité du risque par catégories ---
+reg_niveau <- feols(
+  log_prix_m2 ~ niveau + log_surface + type_local + 
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
+    annee_vente + fe_spatial,
+  data = dvf_zone
+)
+
+# --- MODÈLE 3 : Effet de la distance continue à la zone inondable ---
+reg_distance <- feols(
+  log_prix_m2 ~ dist_inond_km + log_surface + type_local + 
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
+    annee_vente + fe_spatial,
+  data = dvf_zone
+)
+
+# Affichage des résultats comparés
+etable(reg_binaire, reg_niveau, reg_distance, 
+       headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance"))
+```
 
