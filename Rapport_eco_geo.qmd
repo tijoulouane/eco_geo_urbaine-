@@ -1097,7 +1097,7 @@ repartition <- dvf_zone |>
   ) |>
   arrange(desc(n_inond))
 
-print(repartition, n = 30)
+head(repartition, 30)
 ```
 
 ## 2.4 Base de données iris ( revenu médian )
@@ -1327,5 +1327,26 @@ reg_distance <- feols(
 # Affichage des résultats comparés
 etable(reg_binaire, reg_niveau, reg_distance, 
        headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance"))
+```
+
+# 5) Analyse suggestion prof 
+
+variable post a été supprimée en raison d'une collinéarité. code momdifié 
+```{r}
+# 1. Création d'une variable binaire temporelle simple (Avant 2024 vs 2024-2025)
+dvf_zone <- dvf_zone |>
+  mutate(periode_post = if_else(annee_vente >= 2024, "Post-2024", "Pre-2024"))
+
+# 2. Modèle d'interaction propre (sans effet fixe année redondant avec 'post', 
+# mais en conservant les effets fixes spatiaux)
+reg_interaction_propres <- feols(
+  log_prix_m2 ~ dans_zone_inond * I(annee_vente >= 2024) + log_surface + type_local + 
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
+    fe_spatial,
+  data = dvf_zone
+)
+
+# Affichage du résultat de l'interaction
+etable(reg_interaction_propres)
 ```
 
