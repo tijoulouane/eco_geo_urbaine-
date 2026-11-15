@@ -865,6 +865,9 @@ table(inond_nantes$scenario, useNA = "ifany")
 # Définition de la zone d'étude : communes concernées par le TRI
 # ------------------------------------------------------------
 
+nrow(communes_tri)
+# 25
+
 # Communes intersectant les zones inondables
 communes_tri <- communes_44 |>
   st_filter(inond_nantes)
@@ -1267,6 +1270,72 @@ ggplot() +
     caption = "Sources : INSEE Filosofi 2021, IGN"
   ) +
   theme_minimal()
+```
+
+# 3) Analyse descriptives et tableau du corps de texte 
+
+```{r}
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+# Préparation des communes
+carte_communes <- communes_tri %>%
+  mutate(
+    categorie = if_else(
+      code_insee == "44109",
+      "Nantes",
+      "Autres communes"
+    )
+  )
+
+# Calcul du centroïde de chaque commune
+centres_communes <- carte_communes %>%
+  st_point_on_surface() %>%
+  mutate(
+    coord_x = st_coordinates(geometry)[, 1],
+    coord_y = st_coordinates(geometry)[, 2]
+  ) %>%
+  st_drop_geometry()
+
+# Création de la carte
+ggplot(carte_communes) +
+  geom_sf(
+    aes(fill = categorie),
+    color = "white",
+    linewidth = 0.4
+  ) +
+  geom_text_repel(
+    data = centres_communes,
+    aes(x = coord_x, y = coord_y, label = nom_officiel),
+    size = 3,
+    seed = 123,
+    min.segment.length = 0
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Nantes" = "#245A78",
+      "Autres communes" = "#91B9CC"
+    ),
+    name = NULL
+  ) +
+  labs(
+    title = "Territoire d'étude : les 25 communes retenues",
+    subtitle = "Communes intersectant au moins une zone inondable du TRI de Nantes",
+    caption = "Sources : IGN, données communales ; TRI de Nantes"
+  ) +
+  coord_sf(datum = NA) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.title = element_blank()
+  )
+
 ```
 
 # 3) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
