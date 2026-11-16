@@ -114,28 +114,23 @@ On conserve les mutations de type Vente car on veut étudier les transactions im
 
 On autorise uniquement les natures de culture "sols" et NA, pour privilégier les terrains bâtis et éviter d'intégrer des terrains agricoles ou d'autres biens non pertinents, tout en conservant les observations dont la nature n'est pas renseignée.
 
-on conserve uniquement les Maisons et appartements. 
+On conserve uniquement les Maisons et appartements. 
 
-Hypothèse : les biens immobiliers étudiés sont associés à des sols ou à une nature de culture non renseignée.
 
 Attention limite de l'étude : cette hypothèse peut également exclure certaines observations pertinentes.
 
 #### 2.1.1.4 Sélection des ventes et des biens immobiliers
 
 ```{r}
-nature_ok <- c("sols", NA)
-
-dvf_ventes <- dvf |>
+# Sélection des ventes de maisons et d'appartements, vente et sols 
+dvf_clean <- dvf |>
   filter(nature_mutation == "Vente") |>
   group_by(id_mutation) |>
   filter(
     all(type_local %in% c("Maison", "Appartement", "Dépendance")),
-    all(nature_culture %in% nature_ok)
+    all(nature_culture %in% c("sols", NA))
   ) |>
-  ungroup()
-
-# On conserve uniquement les maisons et les appartements.
-dvf_clean <- dvf_ventes |>
+  ungroup() |>
   filter(type_local %in% c("Maison", "Appartement"))
 
 ```
