@@ -212,6 +212,7 @@ dvf_clean <- dvf_clean |>
   )
 ```
 
+
 #### 2.1.1.8 TRAITEMENT DES DOUBLONS ET MUTATIONS MULTIPLES
 
 ```{r}
@@ -865,9 +866,6 @@ table(inond_nantes$scenario, useNA = "ifany")
 # Définition de la zone d'étude : communes concernées par le TRI
 # ------------------------------------------------------------
 
-nrow(communes_tri)
-# 25
-
 # Communes intersectant les zones inondables
 communes_tri <- communes_44 |>
   st_filter(inond_nantes)
@@ -1015,6 +1013,8 @@ dvf_zone |>
 
 # Sauvegarde de la base enrichie
 saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
+
+
 ```
 
 ### 2.3.7 Cartographie des zones inondables
@@ -1249,6 +1249,9 @@ summary(dvf_zone$revenu_median_iris)
 
 # Sauvegarde
 saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
+
+nrow(dvf_zone)  # Nombre d'observations
+ncol(dvf_zone)  # Nombre de variables
 ```
 
 ### 2.4.6 Cartographie du niveau de vie médian par IRIS
@@ -1273,13 +1276,8 @@ ggplot() +
 ```
 
 # 3) Analyse descriptives et tableau du corps de texte 
-
+## 3.1 graphique dans le corps du texte 
 ```{r}
-
-library(sf)
-library(dplyr)
-library(ggplot2)
-library(ggrepel)
 
 # Préparation des communes
 carte_communes <- communes_tri %>%
@@ -1338,10 +1336,6 @@ ggplot(carte_communes) +
 
 ```
 ```{r}
-
-library(sf)
-library(dplyr)
-library(ggplot2)
 
 # Vérifier les scénarios disponibles
 table(inond_nantes$scenario)
@@ -1406,7 +1400,122 @@ ggplot() +
 
 ```
 
-# 3) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
+## 3.2 Analyse univariée 
+
+```{r}
+par(mfrow = c(1, 2))
+
+boxplot(dvf_zone$valeur_fonciere,
+        main = "Distribution des valeurs foncières",
+        ylab = "Valeur foncière (€)")
+
+boxplot(dvf_zone$prix_m2,
+        main = "Distribution des prix au m²",
+        ylab = "Prix au m² (€)")
+```
+
+```{r}
+summary(dvf_zone$prix_m2)
+```
+
+
+```{r}
+# Calcul des effectifs
+repartition <- dvf_zone |>
+  st_drop_geometry() |>
+  count(type_local) |>
+  mutate(
+    proportion = n / sum(n) * 100,
+    etiquette = paste0(type_local, "\n", round(proportion, 1), " %")
+  )
+
+# Diagramme en camembert
+pie(
+  repartition$n,
+  labels = repartition$etiquette,
+  main = "Répartition des transactions selon le type de logement",
+  col = c("lightblue", "lightpink")
+)
+
+```
+```{r}
+dvf_zone |>
+  st_drop_geometry() |>
+  group_by(type_local) |>
+  summarise(
+    nombre_transactions = n(),
+    prix_moyen_m2 = mean(prix_m2, na.rm = TRUE),
+    prix_median_m2 = median(prix_m2, na.rm = TRUE)
+  )
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+
+transactions_communes <- dvf_zone |>
+  st_drop_geometry() |>
+  count(nom_commune, name = "nombre_transactions") |>
+  arrange(desc(nombre_transactions))
+
+ggplot(transactions_communes,
+       aes(x = reorder(nom_commune, nombre_transactions),
+           y = nombre_transactions)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Répartition des transactions immobilières par commune",
+    x = "Commune",
+    y = "Nombre de transactions"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+ggplot() +
+  geom_sf(data = zone_etude,
+          fill = "grey95",
+          color = "grey50") +
+  geom_sf(data = dvf_zone,
+          aes(color = type_local),
+          size = 0.4,
+          alpha = 0.5) +
+  labs(
+    title = "Localisation des transactions immobilières",
+    color = "Type de logement"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+exposition <- dvf_zone |>
+  st_drop_geometry() |>
+  count(niveau, name = "nombre_transactions")
+
+ggplot(exposition,
+       aes(x = niveau, y = nombre_transactions)) +
+  geom_col(fill = "pink") +
+  geom_text(
+    aes(label = nombre_transactions),
+    vjust = -0.5,
+    size = 4
+  ) +
+  labs(
+    title = "Répartition des transactions selon l'exposition au risque d'inondation",
+    x = "Niveau d'exposition",
+    y = "Nombre de transactions"
+  ) +
+  theme_minimal()
+```
+
+## 3.3 Analyse bivariée 
+
+```{r}
+
+```
+
+# 4) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
 
 Création d'une variable combinée pour les effets fixes spatiaux 
 (Quartiers pour Nantes, Communes pour le reste de la métropole)
@@ -1424,7 +1533,8 @@ dvf_zone <- dvf_zone |>
 
 ```
 
-# 4) ESTIMATIONS ÉCONOMÉTRIQUES (Modèles de régression)
+
+# 5) ESTIMATIONS ÉCONOMÉTRIQUES (Modèles de régression)
 
 ```{r}
 
@@ -1457,7 +1567,7 @@ etable(reg_binaire, reg_niveau, reg_distance,
        headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance"))
 ```
 
-# 5) Analyse suggestion prof 
+# 6) Analyse suggestion prof 
 
 variable post a été supprimée en raison d'une collinéarité. code momdifié 
 ```{r}
