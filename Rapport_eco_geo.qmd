@@ -1337,6 +1337,74 @@ ggplot(carte_communes) +
   )
 
 ```
+```{r}
+
+library(sf)
+library(dplyr)
+library(ggplot2)
+
+# Vérifier les scénarios disponibles
+table(inond_nantes$scenario)
+
+# Préparer les zones inondables
+zones_tri <- inond_nantes %>%
+  mutate(
+    scenario = recode(
+      scenario,
+      "04Fai" = "Faible",
+      "02Moy" = "Moyen",
+      "01For" = "Fort"
+    )
+  )
+
+# Réaliser la carte
+ggplot() +
+
+  # Communes du territoire d'étude
+  geom_sf(
+    data = communes_tri,
+    fill = "grey96",
+    color = "grey55",
+    linewidth = 0.3
+  ) +
+
+  # Zones inondables du TRI
+  geom_sf(
+    data = zones_tri,
+    aes(fill = scenario),
+    color = NA,
+    alpha = 0.7
+  ) +
+
+
+  scale_fill_manual(
+    values = c(
+      "Faible" = "#F6D77A",
+      "Moyen" = "#E99555",
+      "Fort" = "#C64B4B"
+    ),
+    name = "Scénario d'inondation"
+  ) +
+
+  labs(
+    title = "Les zones à risque d'inondation du TRI de Nantes",
+    subtitle = "Représentation des trois scénarios cartographiés",
+    caption = "Sources : TRI de Nantes, IGN et OpenStreetMap"
+  ) +
+
+  coord_sf(datum = NA) +
+
+  theme_minimal() +
+
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.title = element_blank()
+  )
+
+```
 
 # 3) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
 
