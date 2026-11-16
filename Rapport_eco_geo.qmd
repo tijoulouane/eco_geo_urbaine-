@@ -23,17 +23,12 @@ dept <- "44"
 
 
 url_dvf <- function(annee, dept) {
-
-  sprintf(
-    "https://files.data.gouv.fr/geo-dvf/latest/csv/%d/departements/%s.csv.gz",
-    annee, dept
-  )
-}
+sprintf(
+    "https://files.data.gouv.fr/geo-dvf/latest/csv/%d/departements/%s.csv.gz",annee, dept)}
 
 
-# ============================================================
-# 3. IMPORTER LES DONNÉES POUR UNE ANNÉE
-# ============================================================
+# IMPORTER LES DONNÉES POUR UNE ANNÉE
+
 
 lire_annee <- function(annee) {
 
@@ -50,8 +45,7 @@ lire_annee <- function(annee) {
       # pour éviter les problèmes de types lors de l'empilement
       col_types = cols(.default = col_character()),
 
-      show_col_types = FALSE
-    )
+      show_col_types = FALSE )
 
     # Ajouter une colonne indiquant l'année des transactions
     donnees <- donnees |>
@@ -64,12 +58,8 @@ lire_annee <- function(annee) {
     # Signaler si une année n'a pas pu être téléchargée
     warning(
       "Impossible d'importer l'année ", annee, " : ",
-      conditionMessage(e)
-    )
-
-    return(NULL)
-  })
-}
+      conditionMessage(e))
+return(NULL)})}
 
 
 #  IMPORTER ET REGROUPER TOUTES LES ANNÉES
@@ -81,22 +71,18 @@ liste_dvf <- map(annees, lire_annee)
 # Empiler les différentes années dans une seule base
 dvf_brut <- list_rbind(liste_dvf)
 
+```
+### 2.1.1 Nettoyage et analyse de la base 
+#### 2.1.1.1 Analyse descriptive 
 
-# ============================================================
-# 5. PREMIÈRES VÉRIFICATIONS
-# ============================================================
-
+```{r}
 # Afficher les dimensions de la base
 dim(dvf_brut)
 
 # Vérifier le nombre de transactions par année
 dvf_brut |>
   count(annee)
-```
-### 2.1.1 Nettoyage et analyse de la base 
-#### 2.1.1.1 Analyse descriptive 
 
-```{r}
 # Analyse descriptive de la base brute
 summary(dvf_brut)
 ```
@@ -114,8 +100,7 @@ dvf <- dvf_brut |>
     nombre_pieces_principales = as.numeric(nombre_pieces_principales),
     surface_terrain           = as.numeric(surface_terrain),
     longitude                 = as.numeric(longitude),
-    latitude                  = as.numeric(latitude)
-  )
+    latitude                  = as.numeric(latitude))
 ```
 
 #### 2.1.1.3 Observations des modalitées 
@@ -129,7 +114,7 @@ On conserve les mutations de type Vente car on veut étudier les transactions im
 
 On autorise uniquement les natures de culture "sols" et NA, pour privilégier les terrains bâtis et éviter d'intégrer des terrains agricoles ou d'autres biens non pertinents, tout en conservant les observations dont la nature n'est pas renseignée.
 
-on conserve uniquement les Maison et appartement 
+on conserve uniquement les Maisons et appartements. 
 
 Hypothèse : les biens immobiliers étudiés sont associés à des sols ou à une nature de culture non renseignée.
 
@@ -217,7 +202,7 @@ dvf_clean <- dvf_clean |>
 
 ```{r}
 # ------------------------------------------------------------
-#Identification des mutations simples et multiples
+# Identification des mutations simples et multiples
 # ------------------------------------------------------------
 
 # On distingue les mutations contenant une seule ligne de celles contenant plusieurs lignes.
