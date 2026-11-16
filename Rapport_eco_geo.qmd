@@ -1278,7 +1278,7 @@ ggplot() +
 # 3) Analyse descriptives et tableau du corps de texte 
 ## 3.1 graphique dans le corps du texte 
 ```{r}
-
+library(ggrepel)
 # Préparation des communes
 carte_communes <- communes_tri %>%
   mutate(
@@ -1513,6 +1513,85 @@ ggplot(exposition,
 
 ```{r}
 
+# Corrélation entre le prix immobilier et les variables explicatives
+
+library(dplyr)
+
+seuil_cor <- 0.1
+
+# Sélection automatique des variables numériques
+variables_num <- dvf_zone |>
+  st_drop_geometry() |>
+  select(where(is.numeric))
+
+# Calcul des corrélations avec le prix au m²
+cor_prix <- sapply(
+  variables_num,
+  function(x) {
+    cor(x, dvf_zone$log_prix_m2,
+        method = "spearman",
+        use = "pairwise.complete.obs")
+  }
+)
+
+# Exclure la corrélation du prix avec lui-même
+cor_prix <- cor_prix[names(cor_prix) != "log_prix_m2"]
+
+# Filtrer les corrélations selon le seuil
+cor_prix_filtre <- cor_prix[abs(cor_prix) >= seuil_cor]
+cor_prix_filtre <- sort(cor_prix_filtre)
+
+# Palette de couleurs
+pal <- colorRampPalette(c("#D95F02", "#F7F7F7", "#2B5C8F"))
+cols <- pal(100)[as.numeric(cut(cor_prix_filtre, breaks = 100))]
+
+# Graphique
+par(mar = c(4, 14, 4, 2))
+
+barplot(
+  cor_prix_filtre,
+  horiz = TRUE,
+  las = 1,
+  col = cols,
+  main = paste0("Corrélations avec le prix immobilier (|r| ≥ ", seuil_cor, ")"),
+  xlab = "Coefficient de corrélation",
+  cex.names = 0.75
+)
+
+abline(v = 0, col = "grey40", lty = 2)
+```
+
+
+```{r}
+library(corrplot)
+
+# Corrélation entre les variables explicatives
+seuil <- 0.9
+
+# Sélection des variables numériques, sans les variables de prix
+variables_num <- dvf_zone |>
+  st_drop_geometry() |>
+  select(where(is.numeric)) |>
+  select(-any_of(c("log_prix_m2", "prix_m2")))
+
+# Calcul de la matrice de corrélation
+matrice_cor <- cor(
+  variables_num,
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
+
+# Suppression de la diagonale
+diag(matrice_cor) <- NA
+
+# Affichage de la matrice
+corrplot(
+  matrice_cor,
+  method = "circle",
+  type = "upper",
+  diag = FALSE,
+  tl.cex = 0.7
+)
 ```
 
 # 4) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
