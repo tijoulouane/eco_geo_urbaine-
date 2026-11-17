@@ -12,12 +12,14 @@ library(tidyverse)
 library(EnvStats)
 library(fixest)
 ```
+
 # 2) Import des données 
 ## 2.1 Base de données DVF
 
 ```{r}
 # Années que l'on souhaite étudier
 annees <- 2022:2025
+
 # département de Loire-Atlantique
 dept <- "44"
 
@@ -29,30 +31,18 @@ sprintf(
 
 # IMPORTER LES DONNÉES POUR UNE ANNÉE
 
-
 lire_annee <- function(annee) {
-
-  # Afficher l'année en cours de téléchargement
   message("Importation des données DVF : ", annee)
 
   tryCatch({
-
-    # Télécharger et lire directement le fichier CSV compressé
     donnees <- read_csv(
       url_dvf(annee, dept),
-
-      # Importer toutes les colonnes en texte
-      # pour éviter les problèmes de types lors de l'empilement
       col_types = cols(.default = col_character()),
-
-      show_col_types = FALSE )
-
+        show_col_types = FALSE )
     # Ajouter une colonne indiquant l'année des transactions
     donnees <- donnees |>
       mutate(annee = annee)
-
     return(donnees)
-
   }, error = function(e) {
 
     # Signaler si une année n'a pas pu être téléchargée
@@ -63,12 +53,9 @@ return(NULL)})}
 
 
 #  IMPORTER ET REGROUPER TOUTES LES ANNÉES
-
-
-# Appliquer la fonction à chaque année
 liste_dvf <- map(annees, lire_annee)
 
-# Empiler les différentes années dans une seule base
+# Une seule base avec toutes les années 
 dvf_brut <- list_rbind(liste_dvf)
 
 ```
@@ -188,18 +175,13 @@ dvf_clean <- dvf_clean |>
     valeur_fonciere > 10000,
     !is.na(surface_reelle_bati),
     (type_local == "Appartement" & surface_reelle_bati >= 9) |
-      (type_local == "Maison" & surface_reelle_bati >= 20)
-  )
+      (type_local == "Maison" & surface_reelle_bati >= 20))
 ```
 
 
-#### 2.1.1.8 TRAITEMENT DES DOUBLONS ET MUTATIONS MULTIPLES
-
+#### 2.1.1.8 Traitement des doublons et mutations multiples 
+##### 2.1.1.9 Identification des mutations simples et multiples
 ```{r}
-# ------------------------------------------------------------
-# Identification des mutations simples et multiples
-# ------------------------------------------------------------
-
 # On distingue les mutations contenant une seule ligne de celles contenant plusieurs lignes.
 
 mutations_simples <- dvf_clean |>
@@ -207,12 +189,17 @@ mutations_simples <- dvf_clean |>
   filter(n == 1) |>
   pull(id_mutation)
 
+# On garde les mutations simples 
 dvf_gardes <- dvf_clean |>
   filter(id_mutation %in% mutations_simples)
 
+# On garde dans un autre objets les mutations multiples 
 dvf_elimines <- dvf_clean |>
   filter(!id_mutation %in% mutations_simples)
+```
 
+
+```{r}
 # Vérification du nombre de lignes et de mutations concernées
 nrow(dvf_gardes)
 nrow(dvf_elimines)
@@ -230,18 +217,17 @@ dvf_elimines |>
     n_lignes = n(),
     types = paste(sort(unique(type_local)), collapse = " + "),
     valeur = first(valeur_fonciere),
-    .groups = "drop"
-  ) |>
+    .groups = "drop" ) |>
   count(types, sort = TRUE)
+```
+
+##### 2.1.1.10 Identification des ventes mixtes
+
+Certaines mutations comprennent plusieurs types de biens  (par exemple : maison + appartement).
+La valeur foncière étant globale, il est impossible de déterminer précisément la valeur de chaque bien.
 
 
-# ------------------------------------------------------------
-# Identification des ventes mixtes
-# ------------------------------------------------------------
-
-# Certaines mutations comprennent plusieurs types de biens  (par exemple : maison + appartement).
-# La valeur foncière étant globale, il est impossible de déterminer précisément la valeur de chaque bien.
-
+```{r}
 ventes_mixtes <- dvf_elimines |>
   group_by(id_mutation) |>
   filter(n_distinct(type_local) > 1) |>
@@ -257,14 +243,11 @@ dvf_elimines <- dvf_elimines |>
   filter(n_distinct(type_local) == 1) |>
   ungroup()
 
+```
 
-# ============================================================
-# TRAITEMENT DES MUTATIONS MULTIPLES DE MAISONS
-# ============================================================
+##### 2.1.1.11 Traitement des mutations multiples de maisons 
 
-# ------------------------------------------------------------
-# Exploration des mutations contenant plusieurs maisons
-# ------------------------------------------------------------
+```{r}
 
 dvf_elimines |>
   filter(
@@ -274,8 +257,7 @@ dvf_elimines |>
   select(
     id_mutation, id_parcelle, type_local,
     surface_reelle_bati, nombre_lots,
-    surface_terrain, nature_culture, valeur_fonciere
-  )
+    surface_terrain, nature_culture, valeur_fonciere)
 
 # Certaines mutations comportent plusieurs lignes pour une même maison : saisies multiples ou présence d'un jardin, par exemple.
 
@@ -292,9 +274,9 @@ dvf_elimines |>
 # On conserve la ligne ayant la surface de terrain la plus élevée.
 
 
-# ------------------------------------------------------------
+
 # Regroupement des maisons
-# ------------------------------------------------------------
+
 
 maisons_regroupees <- dvf_elimines |>
   filter(type_local == "Maison") |>
@@ -312,8 +294,7 @@ maisons_regroupees <- dvf_elimines |>
   ) |>
   ungroup()
 
-# On ne conserve que les mutations pour lesquelles une seule
-# maison a pu être identifiée après regroupement.
+# On ne conserve que les mutations pour lesquelles une seule maison a pu être identifiée après regroupement.
 
 maisons_regroupees <- maisons_regroupees |>
   group_by(id_mutation) |>
@@ -332,9 +313,8 @@ dvf_elimines |>
   count(type_local)
 
 
-# ------------------------------------------------------------
 # Vérification des mutations restantes
-# ------------------------------------------------------------
+
 
 # Inspection d'un échantillon de maisons
 dvf_elimines |>
@@ -360,22 +340,20 @@ dvf_elimines |>
     nature_culture, valeur_fonciere, lot1_numero
   )
 
-# Interprétation :
-# Pour les maisons, les mutations restantes correspondent à des ventes comportant plusieurs maisons ou parcelles pour une seule valeur foncière. Il est impossible de déterminer précisément
 
-# s'il s'agit de biens distincts ou d'un seul bien, ainsi que la valeur attribuable à chaque logement. Elles sont donc écartées.
+```
 
-# Pour les appartements, il s'agit principalement de ventes en lots.
-# Le filtre sur la surface bâtie permet d'écarter les petites annexes (garages, caves, etc.) et de conserver les appartements.
+Interprétation :
+Pour les maisons, les mutations restantes correspondent à des ventes comportant plusieurs maisons ou parcelles pour une seule valeur foncière. Il est impossible de déterminer précisément
+
+##### 2.1.1.12 Traitement des mutations multiples d'appartements 
 
 
-# ============================================================
-# TRAITEMENT DES MUTATIONS MULTIPLES D'APPARTEMENTS
-# ============================================================
+Pour les appartements, il s'agit principalement de ventes en lots.
+Le filtre sur la surface bâtie permet d'écarter les petites annexes (garages, caves, etc.) et de conserver les appartements.
 
-# ------------------------------------------------------------
+```{r}
 #  Lots comprenant un appartement et des annexes
-# ------------------------------------------------------------
 
 # On considère qu'une ligne dont la surface bâtie est inférieure à 9 m², ou non renseignée, correspond à une annexe.
 
@@ -408,7 +386,7 @@ dvf_elimines <- dvf_elimines |>
 # ------------------------------------------------------------
 
 # Certaines mutations comportent plusieurs appartements, sans annexes identifiables.
-#
+
 # Lorsque les surfaces des appartements sont renseignées et que leur nature de culture correspond à "sols", on répartit la  valeur foncière totale proportionnellement à leur surface bâtie.
 
 # Cette méthode suppose implicitement un prix au m² identique pour tous les appartements d'une même mutation.
@@ -470,14 +448,12 @@ dvf_clean <- bind_rows(
 
 ```{r}
 
-# ------------------------------------------------------------
 # Calcul du prix au m²
-# ------------------------------------------------------------
+
 
 dvf_clean <- dvf_clean |>
   mutate(
-    prix_m2 = valeur_fonciere / surface_reelle_bati
-  )
+    prix_m2 = valeur_fonciere / surface_reelle_bati)
 
 # Analyse descriptive du prix au m²
 summary(dvf_clean$prix_m2)
@@ -486,8 +462,7 @@ summary(dvf_clean$prix_m2)
 boxplot(
   dvf_clean$prix_m2,
   main = "Distribution du prix au m²",
-  ylab = "Prix au m² (€)"
-)
+  ylab = "Prix au m² (€)")
 
 # Identification des 15 prix au m² les plus élevés
 dvf_clean |>
@@ -504,27 +479,22 @@ On conserve les valeurs extrêmes du prix au m² pour le moment.
 Elles seront examinées ultérieurement afin de déterminer si certaines observations doivent être écartées.
 
 ```{r}
-# ------------------------------------------------------------
-# Transformation logarithmique et année de vente
-# ------------------------------------------------------------
+# Transformation logarithmique prix au m² et année de vente
+
 
 dvf_clean <- dvf_clean |>
   mutate(
     log_prix_m2 = log(prix_m2),
-    annee_vente = lubridate::year(date_mutation)
-  )
+    annee_vente = lubridate::year(date_mutation))
 ```
 
 #### 2.1.1.12 Derniere vérif et sauvegarde 
+
 ```{r}
-# ============================================================
-#  GÉOLOCALISATION DES TRANSACTIONS
-# ============================================================
 
 # Transformation de la base en objet spatial.
 # Les coordonnées initiales sont en WGS84 (EPSG:4326).
-# On les transforme en Lambert-93 (EPSG:2154), adapté
-# aux analyses spatiales réalisées en France métropolitaine.
+# On les transforme en Lambert-93 (EPSG:2154), adapté aux analyses spatiales réalisées en France métropolitaine.
 
 dvf_sf <- dvf_clean |>
   st_as_sf(
@@ -534,9 +504,7 @@ dvf_sf <- dvf_clean |>
   st_transform(2154)
 
 
-# ------------------------------------------------------------
 # Vérifications finales
-# ------------------------------------------------------------
 
 cat("Observations brutes   :", nrow(dvf_brut), "\n")
 cat("Observations retenues :", nrow(dvf_sf), "\n")
@@ -547,9 +515,7 @@ dvf_sf |>
   count(annee_vente, type_local)
 
 
-# ============================================================
-# 8. SAUVEGARDE DE LA BASE NETTOYÉE
-# ============================================================
+# SAUVEGARDE DE LA BASE NETTOYÉE
 
 # Création du dossier de sauvegarde
 dir.create("data", showWarnings = FALSE)
@@ -557,15 +523,13 @@ dir.create("data", showWarnings = FALSE)
 # Sauvegarde au format RDS (conservation de l'objet sf)
 saveRDS(
   dvf_sf,
-  "data/dvf_44_2022_2025.rds"
-)
+  "data/dvf_44_2022_2025.rds")
 
 # Sauvegarde au format GeoPackage
 st_write(
   dvf_sf,
   "data/dvf_44_2022_2025.gpkg",
-  delete_dsn = TRUE
-)
+  delete_dsn = TRUE)
 
 ```
 
