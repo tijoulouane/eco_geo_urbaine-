@@ -472,12 +472,14 @@ inond_nantes |>
 
 as.numeric(st_area(zone_etude)) / 1e6   # surface de la zone d'étude en km²
 ```
+
 ```{r}
 ggplot() +
   geom_sf(data = communes_tri, fill = "grey95") +
   geom_sf(data = inond_nantes, aes(fill = scenario), colour = NA, alpha = .4) +
   theme_minimal()
 ```
+
 ```{r}
 repartition <- dvf_zone |>
   st_drop_geometry() |>
@@ -491,5 +493,147 @@ repartition <- dvf_zone |>
   arrange(desc(n_inond))
 
 print(repartition, n = 30)
+```
+
+# Données revenus + iris
+```{r}
+# revenus disponibles :
+revenu <- read_delim("data/BASE_TD_FILO_IRIS_2021_DISP.csv", delim = ";",
+                   locale = locale(decimal_mark = "."), show_col_types = FALSE)
+names(revenu)
+
+revenu <- revenu |>
+  mutate(DISP_MED21 = as.numeric(DISP_MED21))
+
+# Contours IRIS (IGN), à télécharger puis lire
+iris <- read_sf("data/CONTOURS-IRIS_3-0__SHP_LAMB93_FXX_2024-01-01/CONTOURS-IRIS/1_DONNEES_LIVRAISON_2024-12-00164/CONTOURS-IRIS_3-0_SHP_LAMB93_FXX-ED2024-01-01/CONTOURS-IRIS.shp") |> st_transform(2154)
+names(iris)   
+
+iris_revenu <- iris |>
+  left_join(revenu |> select(IRIS, DISP_MED21), by = c("CODE_IRIS" = "IRIS"))
+
+# Rattacher chaque vente à son IRIS
+dvf_zone <- st_join(dvf_zone, iris_revenu |> select(CODE_IRIS, DISP_MED21), left = TRUE)
+```
+
+```{r}
+# IRIS de la zone d'étude, avec le niveau de vie
+iris_zone <- iris |>
+  left_join(revenu |> select(IRIS, DISP_MED21), by = c("CODE_IRIS" = "IRIS")) |>
+  filter(lengths(st_intersects(geometry, zone_etude)) > 0)
+
+saveRDS(iris_zone, "data/iris_zone.rds")
+
+ggplot() +
+  geom_sf(data = iris_zone, aes(fill = DISP_MED21), colour = "white", linewidth = .1) +
+  scale_fill_viridis_c(name = "Niveau de vie\nmédian (€)", na.value = "grey85") +
+  labs(title = "Niveau de vie médian par IRIS",
+       caption = "Sources : INSEE (Filosofi), IGN (Contours IRIS)") +
+  theme_minimal()
+
+ggplot() +
+  geom_sf(data = iris_zone, aes(fill = DISP_MED21), colour = NA) +
+  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = .5) +
+  scale_fill_viridis_c(name = "Niveau de vie\nmédian (€)", na.value = "grey85") +
+  labs(title = "Niveau de vie par IRIS et zones inondables (TRI de Nantes)",
+       caption = "Sources : INSEE, IGN, DREAL Pays de la Loire (2014)") +
+  theme_minimal()
+
+ggplot() +
+  geom_sf(data = iris_zone, fill = "grey95", colour = "grey80", linewidth = .1) +
+  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = .3) +
+  geom_sf(data = dvf_zone, aes(colour = prix_m2), size = .3) +
+  scale_colour_viridis_c(trans = "log10", name = "€/m²") +
+  theme_minimal()
+```
+
+```{r}
+library(ggrepel)
+
+# Points d'ancrage des noms : un point par commune (à l'intérieur du polygone)
+noms <- communes_tri |>
+  st_point_on_surface() |>
+  mutate(nom = nom_officiel)      # adapte au nom du champ : names(communes_tri)
+
+ggplot() +
+  geom_sf(data = iris_zone, aes(fill = DISP_MED21), colour = "white", linewidth = .1) +
+  geom_sf(data = communes_tri, fill = NA, colour = "grey30", linewidth = .3) +
+  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = .4) +
+  geom_text_repel(data = noms,
+                  aes(label = nom, geometry = geometry),
+                  stat = "sf_coordinates", size = 3, fontface = "bold",
+                  bg.color = "white", bg.r = .15, min.segment.length = Inf) +
+  scale_fill_viridis_c(name = "Niveau de vie\nmédian (€)", na.value = "grey85") +
+  labs(title = "Niveau de vie médian par IRIS et zones inondables",
+       caption = "Sources : INSEE (Filosofi), IGN, DREAL Pays de la Loire (2014)") +
+  theme_void()
+```
+```{r}
+# Grilles couvrant la zone d'étude (Lambert-93, donc en mètres)
+grille1000 <- st_make_grid(zone_etude, cellsize = 1000)
+grille500  <- st_make_grid(zone_etude, cellsize = 500)
+
+dvf_zone$carreau    <- vapply(st_intersects(dvf_zone, grille1000), function(i) i[1], integer(1))
+dvf_zone$carreau500 <- vapply(st_intersects(dvf_zone, grille500),  function(i) i[1], integer(1))
+
+# Contrôles
+sum(is.na(dvf_zone$carreau))                 # ventes sans carreau : doit être 0
+n_distinct(dvf_zone$carreau)                 # nombre de carreaux de 1 km
+n_distinct(dvf_zone$carreau500)              # nombre de carreaux de 500 m
+```
+
+```{r}
+library(fixest)
+
+d <- dvf_zone |>
+  st_drop_geometry() |>
+  mutate(log_surface    = log(surface_reelle_bati),
+         dist_eau_km    = dist_eau / 1000,
+         dist_centre_km = dist_centre / 1000,
+         dist_inond_km  = dist_inond / 1000,
+         log_niveau_vie = log(DISP_MED21))
+
+# Étape 1 : écart brut
+m1 <- feols(log_prix_m2 ~ dans_zone_inond | annee_vente,
+            data = d, cluster = ~carreau)
+
+# Étape 2 : caractéristiques du bien
+m2 <- feols(log_prix_m2 ~ dans_zone_inond + type_local + log_surface +
+              nombre_pieces_principales | annee_vente,
+            data = d, cluster = ~carreau)
+
+# Étape 3 : aménités (eau, centre) et quartier
+m3 <- feols(log_prix_m2 ~ dans_zone_inond + type_local + log_surface +
+              nombre_pieces_principales + dist_eau_km + dist_centre_km + log_niveau_vie |
+              annee_vente, data = d, cluster = ~carreau)
+
+# Étape 4 : effets fixes communaux
+m4 <- feols(log_prix_m2 ~ dans_zone_inond + type_local + log_surface +
+              nombre_pieces_principales + dist_eau_km + dist_centre_km + log_niveau_vie |
+              annee_vente + code_commune, data = d, cluster = ~carreau)
+
+# Étape 5 : spécification la plus exigeante (voisins comparés)
+m5 <- feols(log_prix_m2 ~ dans_zone_inond + type_local + log_surface +
+              nombre_pieces_principales + dist_eau_km |
+              annee_vente + carreau500, data = d, cluster = ~carreau)
+
+etable(m1, m2, m3, m4, m5, dict = c(dans_zone_inondTRUE = "En zone inondable"))
+```
+```{r}
+colSums(is.na(d[, c("log_niveau_vie", "dist_eau_km", "dist_centre_km", "log_surface",
+                    "nombre_pieces_principales", "carreau", "carreau500", "code_commune")]))
+```
+
+```{r}
+#suppression alétaoire donc pas de problème mais comparer le niveau de pertinence avec et sans iris
+d |>
+  group_by(dans_zone_inond) |>
+  summarise(n = n(),
+            n_na = sum(is.na(log_niveau_vie)),
+            part_na = round(100 * mean(is.na(log_niveau_vie)), 1))
+
+d |>
+  filter(is.na(log_niveau_vie)) |>
+  count(code_commune, sort = TRUE) |> head(10)
 ```
 
