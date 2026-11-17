@@ -11,6 +11,12 @@ library(sf)
 library(tidyverse)
 library(EnvStats)
 library(fixest)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(ggrepel)
+library(corrplot)
+library(scales)
 ```
 
 # 2) Import des données 
@@ -535,10 +541,6 @@ st_write(
 
 ## 2.2 Base de données IGN, contours communes 
 
-Objectif :
-Constituer une base de données géographiques permettant d'étudier la proximité des biens immobiliers avec les cours d'eau et les surfaces en eau en Loire-Atlantique.
-
- Sources utilisées :
  - IGN (Admin Express) : limites administratives des communes.
  - OpenStreetMap (Geofabrik) : cours d'eau et surfaces en eau.
 
@@ -547,7 +549,7 @@ Toutes les données sont harmonisées en Lambert-93 (EPSG:2154), afin de permett
 ### 2.2.1 Import des données 
 
 Les données IGN sont récupérées via un service WFS.
- Le téléchargement est réalisé par lots de 5 000 observations afin de pouvoir récupérer les couches volumineuses sans dépasser les limites du service.
+Le téléchargement est réalisé par lots de 5 000 observations afin de pouvoir récupérer les couches volumineuses sans dépasser les limites du service.
  
 ```{r}
 
@@ -567,19 +569,16 @@ wfs_get <- function(base_url, layer, bbox = NULL,
       "&STARTINDEX=", i * page,
       if (!is.null(bbox))
         paste0("&BBOX=", paste(bbox, collapse = ","), ",EPSG:2154")
-      else ""
-    )
+      else "")
 
     chunk <- tryCatch(
       read_sf(url),
-      error = function(e) NULL
-    )
+      error = function(e) NULL)
 
     # Arrêt si aucune donnée n'est récupérée
     if (is.null(chunk) || nrow(chunk) == 0) break
 
-    # Uniformisation des types : toutes les variables sont
-    # converties en caractères, sauf la géométrie.
+    # Uniformisation des types : toutes les variables sont converties en caractères, sauf la géométrie.
     g <- attr(chunk, "sf_column")
 
     chunk <- chunk |>
@@ -600,24 +599,14 @@ st_transform(resultat, 2154)
 ```
  
 ```{r}
-
-# ------------------------------------------------------------
-# Définition de la zone d'étude
-# ------------------------------------------------------------
-
 ign <- "https://data.geopf.fr/wfs/ows"
 
-# Emprise approximative de la Loire-Atlantique en Lambert-93 :
+# approximation de la Loire-Atlantique en Lambert-93 :
 # xmin, ymin, xmax, ymax.
-# Cette emprise permet de limiter le téléchargement aux données
-# situées dans une zone proche du département.
+# Cela limite le téléchargement aux données situées dans une zone proche du département.
 
 bbox_44 <- c(270000, 6640000, 420000, 6780000)
 
-
-# ------------------------------------------------------------
-#  Récupération des limites administratives (IGN)
-# ------------------------------------------------------------
 
 # Téléchargement de la couche des communes depuis Admin Express.
 # Cette couche permet d'identifier les communes appartenant
@@ -626,8 +615,7 @@ bbox_44 <- c(270000, 6640000, 420000, 6780000)
 communes <- wfs_get(
   ign,
   "ADMINEXPRESS-COG.LATEST:commune",
-  bbox = bbox_44
-)
+  bbox = bbox_44)
 
 # Vérification des variables disponibles
 names(communes)
@@ -636,8 +624,7 @@ names(communes)
 communes_44 <- communes |>
   filter(str_starts(code_insee, "44"))
 
-# Regroupement des communes pour obtenir l'emprise
-# géographique du département.
+# Regroupement des communes pour obtenir l'emprise géographique du département.
 dep_44 <- st_union(communes_44)
 
 # Sauvegarde de la couche des communes
@@ -646,25 +633,20 @@ saveRDS(communes_44, "data/communes_44.rds")
 ```
  
 ## 2.3 Base de données Réseaux d'eau naturel 
+
 ```{r}
-
-# ------------------------------------------------------------
 # Extraction des données hydrographiques (OSM)
-# ------------------------------------------------------------
-
 dir.create(
   "data/osm",
   recursive = TRUE,
-  showWarnings = FALSE
-)
+  showWarnings = FALSE)
 
-# Archive téléchargée manuellement
+# téléchargée manuellement
 fichier_zip <- "data/osm/pays-de-la-loire-261109-free.shp.zip"
 
 # Vérification
 if (!file.exists(fichier_zip)) {
-  stop("L'archive OSM est introuvable.")
-}
+  stop("L'archive OSM est introuvable.")}
 
 # Vérification de l'intégrité
 contenu_zip <- zip::zip_list(fichier_zip)
@@ -676,21 +658,21 @@ if (nrow(contenu_zip) == 0) {
 # Extraction
 utils::unzip(
   fichier_zip,
-  exdir = "data/osm"
-)
+  exdir = "data/osm")
 
 # Vérification des fichiers extraits
 list.files("data/osm", recursive = TRUE)
 
-# ------------------------------------------------------------
-# Extraction des cours d'eau (données linéaires)
-# ------------------------------------------------------------
+```
 
-# On conserve les principaux types de cours d'eau :
-# - river : rivières et fleuves ;
-# - stream : ruisseaux ;
-# - canal : canaux.
-#
+### 2.3.1 Extraction des cours d'eau 
+
+ On conserve les principaux types de cours d'eau :
+ - river : rivières et fleuves ;
+ - stream : ruisseaux ;
+ - canal : canaux.
+ 
+```{r}
 # Les données sont ensuite reprojetées en Lambert-93.
 
 cours_eau <- read_sf(
@@ -698,39 +680,36 @@ cours_eau <- read_sf(
 ) |>
   filter(fclass %in% c("river", "stream", "canal")) |>
   st_transform(2154)
+```
+ 
+### 2.3.2 Extraction des surfaces en eau
 
+Récupération des plans d'eau et surfaces hydrographiques :
+Loire, estuaire, étangs et autres surfaces en eau.
 
-# ------------------------------------------------------------
-# Extraction des surfaces en eau (données surfaciques)
-# ------------------------------------------------------------
-
-# Récupération des plans d'eau et surfaces hydrographiques :
-# Loire, estuaire, étangs et autres surfaces en eau.
-#
+```{r}
 # Ces données sont représentées sous forme de polygones.
 
 eau_surf <- read_sf(
   "data/osm/gis_osm_water_a_free_1.shp"
 ) |>
   st_transform(2154)
+```
 
 
-# ------------------------------------------------------------
+### 2.3.3 Nettoyage de la base 
+```{r}
 #  Restriction à la zone d'étude : Loire-Atlantique
-# ------------------------------------------------------------
 
 # Les données OpenStreetMap couvrent l'ensemble des Pays de la Loire.
-# On ne conserve que les objets géographiques intersectant
-# les limites du département de Loire-Atlantique.
+# On ne conserve que les objets géographiques intersectant les limites du département de Loire-Atlantique.
 
 cours_eau <- st_filter(cours_eau, dep_44)
 
 eau_surf <- st_filter(eau_surf, dep_44)
 
 
-# ------------------------------------------------------------
 # Vérifications des données récupérées
-# ------------------------------------------------------------
 
 # Nombre d'objets géographiques récupérés
 nrow(communes_44)
@@ -750,44 +729,30 @@ st_geometry_type(eau_surf) |>
   table()
 
 
-# ============================================================
-# 3. SAUVEGARDE DES DONNÉES GÉOGRAPHIQUES
-# ============================================================
+# SAUVEGARDE DES DONNÉES GÉOGRAPHIQUES
 
-# Sauvegarde des différentes couches au format RDS
-# afin de pouvoir les réutiliser dans les analyses spatiales
-# sans avoir à télécharger à nouveau les données.
-
-saveRDS(
-  communes_44,
-  "data/communes_44.rds"
-)
+# Sauvegarde des différentes couches au format RDS afin de pouvoir les réutiliser dans les analyses spatiales
 
 saveRDS(
   cours_eau,
-  "data/cours_eau_44.rds"
-)
+  "data/cours_eau_44.rds")
 
 saveRDS(
   eau_surf,
-  "data/eau_surf_44.rds"
-)
+  "data/eau_surf_44.rds")
 
 ```
 
-## 2.3 Base de données Zones innondable TRI 
-### 2.3.1 Import 
+## 2.4 Base de données Zones innondable TRI 
+### 2.4.1 Import 
+
 ```{r}
-# ------------------------------------------------------------
-# Importation des données inondations (TRI de Nantes)
-# ------------------------------------------------------------
 
 # Fichiers shapefile
 fichiers_inond <- list.files(
   "data/tri nantes",
   pattern = "\\.shp$",
-  full.names = TRUE
-)
+  full.names = TRUE)
 
 # Vérification de la présence du fichier
 stopifnot(length(fichiers_inond) > 0)
@@ -801,15 +766,12 @@ inond_nantes <- read_sf(fichiers_inond) |>
 glimpse(inond_nantes)
 st_bbox(inond_nantes)
 table(inond_nantes$scenario, useNA = "ifany")
+st_crs(inond_nantes)
 ```
 
-### 2.3.2 Définition de la zone d'étude 
+### 2.4.2 Définition de la zone d'étude et fusion des bases 
 
 ```{r}
-# ------------------------------------------------------------
-# Définition de la zone d'étude : communes concernées par le TRI
-# ------------------------------------------------------------
-
 # Communes intersectant les zones inondables
 communes_tri <- communes_44 |>
   st_filter(inond_nantes)
@@ -822,12 +784,9 @@ dvf_zone <- dvf_sf |>
   st_filter(zone_etude)
 ```
 
-### 2.3.3 Construction par scénario 
+### 2.4.3 Construction par scénario 
 
 ```{r}
-# ------------------------------------------------------------
-# Construction des zones inondables par scénario
-# ------------------------------------------------------------
 
 # Fonction de regroupement des polygones par scénario
 union_scen <- function(motif) {
@@ -849,7 +808,7 @@ z_faible <- union_scen("fai")
 z_tout <- st_union(inond_nantes)
 ```
 
-### 2.3.4 Identification des biens situés en zone inondable
+### 2.4.4 Identification des biens situés en zone inondable
 
 ```{r}
 # Fonction d'identification des points dans une zone
@@ -873,58 +832,15 @@ dvf_zone <- dvf_zone |>
       dans_fort   ~ "fort",
       dans_moyen  ~ "moyen",
       dans_faible ~ "faible",
-      TRUE        ~ "hors zone"
-    ),
+      TRUE        ~ "hors zone"),
 
     niveau = factor(
       niveau,
-      levels = c("hors zone", "faible", "moyen", "fort")
-    )
-  )
+      levels = c("hors zone", "faible", "moyen", "fort")))
 ```
 
-### 2.3.2 Calcul 
 
-```{r}
-# ------------------------------------------------------------
-# Calcul des distances géographiques (en mètres)
-# ------------------------------------------------------------
-
-# Distance à la zone inondable la plus proche
-dvf_zone$dist_inond <- as.numeric(
-  st_distance(dvf_zone, z_tout)
-)
-
-# Fonction de calcul de la distance à l'entité la plus proche
-dist_plus_proche <- function(pts, cible) {
-
-  idx <- st_nearest_feature(pts, cible)
-
-  as.numeric(
-    st_distance(pts, cible[idx, ], by_element = TRUE)
-  )
-}
-
-# Distance aux cours d'eau et plans d'eau
-dvf_zone <- dvf_zone |>
-  mutate(
-    dist_cours_eau = dist_plus_proche(geometry, cours_eau),
-    dist_eau_surf  = dist_plus_proche(geometry, eau_surf),
-    dist_eau       = pmin(dist_cours_eau, dist_eau_surf)
-  )
-
-# Distance au centre de Nantes (Place du Commerce)
-centre_nantes <- st_sfc(
-  st_point(c(355500, 6689500)),
-  crs = 2154
-)
-
-dvf_zone$dist_centre <- as.numeric(
-  st_distance(dvf_zone, centre_nantes)
-)
-```
-
-### 2.3.6 Vérifications et statistiques descriptives
+### 2.4.5 Vérifications et statistiques descriptives
 
 ```{r}
 
@@ -961,37 +877,265 @@ saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
 
 ```
 
-### 2.3.7 Cartographie des zones inondables
+
+## 2.5 Base de données iris ( revenu médian )
+### 2.5.1 Import 
+```{r}
+
+dir.create("data/revenus_iris", recursive = TRUE, showWarnings = FALSE)
+
+# Téléchargement du fichier ZIP
+url_revenu <- paste0(
+  "https://www.insee.fr/fr/statistiques/fichier/",
+  "8229323/BASE_TD_FILO_IRIS_2021_DISP_CSV.zip")
+
+fichier_zip <- "data/revenus_iris/revenus_iris_2021.zip"
+
+if (!file.exists(fichier_zip)) {
+  download.file(url_revenu, fichier_zip, mode = "wb")}
+
+# Décompression
+unzip(fichier_zip, exdir = "data/revenus_iris")
+
+
+fichier_csv <- "data/revenus_iris/BASE_TD_FILO_IRIS_2021_DISP.csv"
+
+revenus_iris <- read_delim(
+  fichier_csv,
+  delim = ";",
+  locale = locale(encoding = "UTF-8"),
+  show_col_types = FALSE)
+
+# Vérifications
+glimpse(revenus_iris)
+names(revenus_iris)
+```
+
+
+### 2.5.2 Nettoyage 
 
 ```{r}
 
-# Carte 1 : zone d'étude et surfaces inondables
-ggplot() +
-  geom_sf(data = communes_tri, fill = "grey95", colour = "grey60") +
-  geom_sf(data = inond_nantes, fill = "steelblue", colour = NA, alpha = 0.6) +
-  geom_sf(data = eau_surf |> st_filter(zone_etude),
-          fill = "lightblue", colour = NA) +
+revenus_iris <- revenus_iris |>
+  transmute(
+    code_iris = IRIS,
+    revenu_median_iris = parse_number(
+      DISP_MED21,
+      locale = locale(decimal_mark = ",")  ) )
+
+# Vérifications
+glimpse(revenus_iris)
+summary(revenus_iris$revenu_median_iris)
+
+# Vérification des doublons
+revenus_iris |> count(code_iris) |> filter(n > 1)
+```
+moyenne et médiane proche du revenu et pas de doublons 
+### 2.5.3 Importation des contours IRIS (IGN)
+```{r}
+
+bbox <- st_bbox(zone_etude)
+
+url_iris <- paste0(
+  "https://data.geopf.fr/wfs/ows?",
+  "SERVICE=WFS",
+  "&VERSION=2.0.0",
+  "&REQUEST=GetFeature",
+  "&TYPENAMES=STATISTICALUNITS.IRIS%3Acontours_iris",
+  "&SRSNAME=EPSG%3A2154",
+  "&BBOX=", paste(as.numeric(bbox), collapse = ","),
+  ",EPSG:2154",
+  "&COUNT=5000",
+  "&OUTPUTFORMAT=application%2Fjson")
+
+iris_sf <- st_read(url_iris, quiet = TRUE) |>
+  st_transform(2154) |>
+  st_make_valid() |>
+  st_filter(zone_etude)
+
+# Vérifications
+nrow(iris_sf)
+names(iris_sf)
+glimpse(iris_sf)
+```
+
+```{r}
+names(iris_sf)
+glimpse(iris_sf)
+```
+
+
+### 2.5.4 Jointure 
+
+```{r}
+
+iris_sf <- iris_sf |>
+  left_join(
+    revenus_iris,
+    by = "code_iris"
+  )
+
+# Vérifications
+summary(iris_sf$revenu_median_iris)
+
+iris_sf |>
+  st_drop_geometry() |>
+  summarise(
+    n_iris = n(),
+    n_avec_revenu = sum(!is.na(revenu_median_iris)),
+    n_sans_revenu = sum(is.na(revenu_median_iris))
+  )
+```
+La base de données comprend 266 IRIS, dont 206 disposent d'un revenu médian renseigné, tandis que 60 présentent des données manquantes (soit 22,6 %). Le revenu médian des IRIS s'élève à 25 625 €, avec des valeurs comprises entre 13 280 € et 36 290 €.
+
+### 2.5.5 Rattachement du revenu médian aux transactions DVF
+
+```{r}
+
+dvf_zone <- dvf_zone |>
+  st_join(
+    iris_sf |> select(code_iris, revenu_median_iris),
+    join = st_intersects,
+    left = TRUE
+  )
+
+# Vérifications
+dvf_zone |>
+  st_drop_geometry() |>
+  summarise(
+    n_transactions = n(),
+    n_avec_revenu = sum(!is.na(revenu_median_iris)),
+    n_sans_revenu = sum(is.na(revenu_median_iris)),
+    part_sans_revenu = mean(is.na(revenu_median_iris)))
+
+# Distribution du revenu médian
+summary(dvf_zone$revenu_median_iris)
+
+# Sauvegarde
+saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
+
+nrow(dvf_zone)  # Nombre d'observations
+ncol(dvf_zone)  # Nombre de variables
+```
+À l'échelle des transactions immobilières, sur les 33 138 observations, 31 598 disposent d'un revenu médian renseigné, tandis que 1 540 sont manquantes. Le revenu médian des IRIS associés aux transactions s'élève à 25 650 €, avec des valeurs comprises entre 13 720 € et 36 290 €.
+
+# 3) Analyse descriptives et tableau du corps de texte 
+
+## 3.1 graphique dans le corps du texte 
+### Territoire d'étude
+```{r}
+
+# Préparation des communes
+carte_communes <- communes_tri %>%
+  mutate(
+    categorie = if_else(
+      code_insee == "44109",
+      "Nantes",
+      "Autres communes"))
+
+# Calcul du centroïde de chaque commune
+centres_communes <- carte_communes %>%
+  st_point_on_surface() %>%
+  mutate(
+    coord_x = st_coordinates(geometry)[, 1],
+    coord_y = st_coordinates(geometry)[, 2]) %>%
+  st_drop_geometry()
+
+# Création de la carte
+ggplot(carte_communes) +
+  geom_sf(
+    aes(fill = categorie),
+    color = "white",
+    linewidth = 0.4) +
+  geom_text_repel(
+    data = centres_communes,
+    aes(x = coord_x, y = coord_y, label = nom_officiel),
+    size = 3,
+    seed = 123,
+    min.segment.length = 0) +
+  scale_fill_manual(
+    values = c(
+      "Nantes" = "#245A78",
+      "Autres communes" = "#91B9CC"),
+    name = NULL) +
   labs(
-    title = "Zone d'étude et surfaces inondables",
-    subtitle = "Territoire à risque important d'inondation de Nantes",
-    caption = "Sources : DREAL Pays de la Loire, IGN et OSM"
+    title = "Territoire d'étude : les 25 communes retenues",
+    subtitle = "Communes intersectant au moins une zone inondable du TRI de Nantes",
+    caption = "Sources : IGN, données communales ; TRI de Nantes"
   ) +
-  theme_minimal()
+  coord_sf(datum = NA) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.title = element_blank())
 
+```
+### Représentation des trois scénarios
+```{r}
+# Vérifier les scénarios disponibles
+table(inond_nantes$scenario)
 
-# Carte 2 : prix au m² des transactions
+# Préparer les zones inondables
+zones_tri <- inond_nantes %>%
+  mutate(
+    scenario = recode(
+      scenario,
+      "04Fai" = "Faible",
+      "02Moy" = "Moyen",
+      "01For" = "Fort"))
+
+# Réaliser la carte
 ggplot() +
-  geom_sf(data = communes_tri, fill = NA, colour = "grey70") +
-  geom_sf(data = dvf_zone, aes(colour = prix_m2), size = 0.4) +
-  scale_colour_viridis_c(
-    trans = "log10",
-    name = "Prix au m² (€)"
+
+  # Communes du territoire d'étude
+  geom_sf(
+    data = communes_tri,
+    fill = "grey96",
+    color = "grey55",
+    linewidth = 0.3) +
+
+  # Zones inondables du TRI
+  geom_sf(
+    data = zones_tri,
+    aes(fill = scenario),
+    color = NA,
+    alpha = 0.7) +
+
+
+  scale_fill_manual(
+    values = c(
+      "Faible" = "#F6D77A",
+      "Moyen" = "#E99555",
+      "Fort" = "#C64B4B" ),
+    name = "Scénario d'inondation") +
+
+  labs(
+    title = "Les zones à risque d'inondation du TRI de Nantes",
+    subtitle = "Représentation des trois scénarios cartographiés",
+    caption = "Sources : TRI de Nantes, IGN et OpenStreetMap"
   ) +
-  labs(title = "Prix au m² des transactions immobilières") +
-  theme_minimal()
+
+  coord_sf(datum = NA) +
+
+  theme_minimal() +
+
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 10),
+    legend.position = "bottom",
+    panel.grid = element_blank(),
+    axis.title = element_blank())
+
+```
 
 
-# Carte 3 : biens situés dans et hors zone inondable
+### Biens situés dans et hors zone inondable
+
+```{r}
+
 ggplot() +
   geom_sf(data = communes_tri, fill = "grey95", colour = "grey70") +
   geom_sf(data = inond_nantes, fill = "steelblue",
@@ -1003,20 +1147,67 @@ ggplot() +
   ) +
   labs(title = "Exposition des transactions aux zones inondables") +
   theme_minimal()
-
-
-# Carte 4 : répartition des scénarios
-ggplot() +
-  geom_sf(data = communes_tri, fill = "grey95", colour = "grey70") +
-  geom_sf(data = inond_nantes, aes(fill = scenario),
-          colour = NA, alpha = 0.5) +
-  labs(title = "Répartition des zones inondables par scénario",
-       fill = "Scénario") +
-  theme_minimal()
 ```
 
 
-### 2.3.8  Répartition des biens exposés par commune
+
+
+### Cartographie du niveau de vie médian par IRIS
+```{r}
+ggplot() +
+  # Contours des IRIS
+  geom_sf(
+    data = iris_sf,
+    fill = NA,
+    color = "grey65",
+    linewidth = 0.2
+  ) +
+  # Transactions colorées selon le revenu médian
+  geom_sf(
+    data = dvf_zone,
+    aes(color = revenu_median_iris),
+    size = 0.6,
+    alpha = 0.75
+  ) +
+  scale_color_viridis_c(
+    name = "Revenu médian\n(€/UC)",
+    option = "viridis",
+    na.value = "grey80"
+  ) +
+  labs(
+    title = "Revenu médian associé aux transactions immobilières",
+    subtitle = "Répartition des transactions selon le revenu médian de leur IRIS",
+    caption = "Sources : DVF, INSEE Filosofi 2021, IGN"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 15,
+      hjust = 0
+    ),
+    plot.subtitle = element_text(
+      size = 10,
+      color = "grey35"
+    ),
+    plot.caption = element_text(
+      size = 8,
+      color = "grey45",
+      hjust = 1
+    ),
+    legend.title = element_text(face = "bold", size = 10),
+    legend.text = element_text(size = 9),
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = margin(15, 15, 15, 15)
+  )
+
+```
+De manière cohérente on observe que les zone ayant des revenu médian plus important sont au niveau du centre ville de nantes. 
+
+###  Répartition des biens exposés par commune
 
 ```{r}
 
@@ -1036,312 +1227,6 @@ repartition <- dvf_zone |>
   arrange(desc(n_inond))
 
 head(repartition, 30)
-```
-
-## 2.4 Base de données iris ( revenu médian )
-### 2.4.1 Import 
-```{r}
-# ------------------------------------------------------------
-# Importation des revenus médians par IRIS (INSEE - Filosofi 2021)
-# ------------------------------------------------------------
-
-dir.create("data/revenus_iris", recursive = TRUE, showWarnings = FALSE)
-
-# Téléchargement du fichier ZIP
-url_revenu <- paste0(
-  "https://www.insee.fr/fr/statistiques/fichier/",
-  "8229323/BASE_TD_FILO_IRIS_2021_DISP_CSV.zip"
-)
-
-fichier_zip <- "data/revenus_iris/revenus_iris_2021.zip"
-
-if (!file.exists(fichier_zip)) {
-  download.file(url_revenu, fichier_zip, mode = "wb")
-}
-
-# Décompression
-unzip(fichier_zip, exdir = "data/revenus_iris")
-
-# ------------------------------------------------------------
-# Lecture de la base INSEE
-# ------------------------------------------------------------
-
-fichier_csv <- "data/revenus_iris/BASE_TD_FILO_IRIS_2021_DISP.csv"
-
-revenus_iris <- read_delim(
-  fichier_csv,
-  delim = ";",
-  locale = locale(encoding = "UTF-8"),
-  show_col_types = FALSE
-)
-
-# Vérifications
-glimpse(revenus_iris)
-names(revenus_iris)
-```
-
-
-### 2.4.2 Nettoyage 
-
-```{r}
-# ------------------------------------------------------------
-# Préparation des revenus médians par IRIS (INSEE)
-# ------------------------------------------------------------
-
-revenus_iris <- revenus_iris |>
-  transmute(
-    code_iris = IRIS,
-    revenu_median_iris = parse_number(
-      DISP_MED21,
-      locale = locale(decimal_mark = ",")
-    )
-  )
-
-# Vérifications
-glimpse(revenus_iris)
-summary(revenus_iris$revenu_median_iris)
-
-# Vérification des doublons
-revenus_iris |> count(code_iris) |> filter(n > 1)
-```
-
-### 2.4.3 Importation des contours IRIS (IGN)
-```{r}
-# ------------------------------------------------------------
-# Importation des contours IRIS (IGN)
-# ------------------------------------------------------------
-
-bbox <- st_bbox(zone_etude)
-
-url_iris <- paste0(
-  "https://data.geopf.fr/wfs/ows?",
-  "SERVICE=WFS",
-  "&VERSION=2.0.0",
-  "&REQUEST=GetFeature",
-  "&TYPENAMES=STATISTICALUNITS.IRIS%3Acontours_iris",
-  "&SRSNAME=EPSG%3A2154",
-  "&BBOX=", paste(as.numeric(bbox), collapse = ","),
-  ",EPSG:2154",
-  "&COUNT=5000",
-  "&OUTPUTFORMAT=application%2Fjson"
-)
-
-iris_sf <- st_read(url_iris, quiet = TRUE) |>
-  st_transform(2154) |>
-  st_make_valid() |>
-  st_filter(zone_etude)
-
-# Vérifications
-nrow(iris_sf)
-names(iris_sf)
-glimpse(iris_sf)
-```
-
-```{r}
-names(iris_sf)
-glimpse(iris_sf)
-```
-
-
-### 2.4.4 Jointure 
-
-```{r}
-# ------------------------------------------------------------
-# Jointure des revenus INSEE aux contours IRIS IGN
-# ------------------------------------------------------------
-
-iris_sf <- iris_sf |>
-  left_join(
-    revenus_iris,
-    by = "code_iris"
-  )
-
-# Vérifications
-summary(iris_sf$revenu_median_iris)
-
-iris_sf |>
-  st_drop_geometry() |>
-  summarise(
-    n_iris = n(),
-    n_avec_revenu = sum(!is.na(revenu_median_iris)),
-    n_sans_revenu = sum(is.na(revenu_median_iris))
-  )
-```
-
-### 2.4.5 Rattachement du revenu médian aux transactions DVF
-```{r}
-
-dvf_zone <- dvf_zone |>
-  st_join(
-    iris_sf |> select(code_iris, revenu_median_iris),
-    join = st_intersects,
-    left = TRUE
-  )
-
-# Vérifications
-dvf_zone |>
-  st_drop_geometry() |>
-  summarise(
-    n_transactions = n(),
-    n_avec_revenu = sum(!is.na(revenu_median_iris)),
-    n_sans_revenu = sum(is.na(revenu_median_iris)),
-    part_sans_revenu = mean(is.na(revenu_median_iris))
-  )
-
-# Distribution du revenu médian
-summary(dvf_zone$revenu_median_iris)
-
-# Sauvegarde
-saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
-
-nrow(dvf_zone)  # Nombre d'observations
-ncol(dvf_zone)  # Nombre de variables
-```
-
-### 2.4.6 Cartographie du niveau de vie médian par IRIS
-```{r}
-ggplot() +
-  geom_sf(
-    data = iris_sf,
-    aes(fill = revenu_median_iris),
-    colour = "white",
-    linewidth = 0.1
-  ) +
-  scale_fill_viridis_c(
-    name = "Revenu médian\n(€/UC)",
-    na.value = "grey85"
-  ) +
-  labs(
-    title = "Niveau de vie médian par IRIS",
-    subtitle = "Nantes et communes environnantes – 2021",
-    caption = "Sources : INSEE Filosofi 2021, IGN"
-  ) +
-  theme_minimal()
-```
-
-# 3) Analyse descriptives et tableau du corps de texte 
-## 3.1 graphique dans le corps du texte 
-```{r}
-library(ggrepel)
-# Préparation des communes
-carte_communes <- communes_tri %>%
-  mutate(
-    categorie = if_else(
-      code_insee == "44109",
-      "Nantes",
-      "Autres communes"
-    )
-  )
-
-# Calcul du centroïde de chaque commune
-centres_communes <- carte_communes %>%
-  st_point_on_surface() %>%
-  mutate(
-    coord_x = st_coordinates(geometry)[, 1],
-    coord_y = st_coordinates(geometry)[, 2]
-  ) %>%
-  st_drop_geometry()
-
-# Création de la carte
-ggplot(carte_communes) +
-  geom_sf(
-    aes(fill = categorie),
-    color = "white",
-    linewidth = 0.4
-  ) +
-  geom_text_repel(
-    data = centres_communes,
-    aes(x = coord_x, y = coord_y, label = nom_officiel),
-    size = 3,
-    seed = 123,
-    min.segment.length = 0
-  ) +
-  scale_fill_manual(
-    values = c(
-      "Nantes" = "#245A78",
-      "Autres communes" = "#91B9CC"
-    ),
-    name = NULL
-  ) +
-  labs(
-    title = "Territoire d'étude : les 25 communes retenues",
-    subtitle = "Communes intersectant au moins une zone inondable du TRI de Nantes",
-    caption = "Sources : IGN, données communales ; TRI de Nantes"
-  ) +
-  coord_sf(datum = NA) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(face = "bold", size = 15),
-    plot.subtitle = element_text(size = 10),
-    legend.position = "bottom",
-    panel.grid = element_blank(),
-    axis.title = element_blank()
-  )
-
-```
-```{r}
-
-# Vérifier les scénarios disponibles
-table(inond_nantes$scenario)
-
-# Préparer les zones inondables
-zones_tri <- inond_nantes %>%
-  mutate(
-    scenario = recode(
-      scenario,
-      "04Fai" = "Faible",
-      "02Moy" = "Moyen",
-      "01For" = "Fort"
-    )
-  )
-
-# Réaliser la carte
-ggplot() +
-
-  # Communes du territoire d'étude
-  geom_sf(
-    data = communes_tri,
-    fill = "grey96",
-    color = "grey55",
-    linewidth = 0.3
-  ) +
-
-  # Zones inondables du TRI
-  geom_sf(
-    data = zones_tri,
-    aes(fill = scenario),
-    color = NA,
-    alpha = 0.7
-  ) +
-
-
-  scale_fill_manual(
-    values = c(
-      "Faible" = "#F6D77A",
-      "Moyen" = "#E99555",
-      "Fort" = "#C64B4B"
-    ),
-    name = "Scénario d'inondation"
-  ) +
-
-  labs(
-    title = "Les zones à risque d'inondation du TRI de Nantes",
-    subtitle = "Représentation des trois scénarios cartographiés",
-    caption = "Sources : TRI de Nantes, IGN et OpenStreetMap"
-  ) +
-
-  coord_sf(datum = NA) +
-
-  theme_minimal() +
-
-  theme(
-    plot.title = element_text(face = "bold", size = 15),
-    plot.subtitle = element_text(size = 10),
-    legend.position = "bottom",
-    panel.grid = element_blank(),
-    axis.title = element_blank()
-  )
-
 ```
 
 ## 3.2 Analyse univariée 
@@ -1382,6 +1267,7 @@ pie(
 )
 
 ```
+
 ```{r}
 dvf_zone |>
   st_drop_geometry() |>
@@ -1392,9 +1278,8 @@ dvf_zone |>
     prix_median_m2 = median(prix_m2, na.rm = TRUE)
   )
 ```
+
 ```{r}
-library(dplyr)
-library(ggplot2)
 
 transactions_communes <- dvf_zone |>
   st_drop_geometry() |>
@@ -1454,12 +1339,9 @@ ggplot(exposition,
 ```
 
 ## 3.3 Analyse bivariée 
+### 3.3.1 Corrélation entre le prix immobilier et les variables explicatives
 
 ```{r}
-
-# Corrélation entre le prix immobilier et les variables explicatives
-
-library(dplyr)
 
 seuil_cor <- 0.1
 
@@ -1505,11 +1387,8 @@ barplot(
 abline(v = 0, col = "grey40", lty = 2)
 ```
 
-
+### 3.3.2 Corrélation entre les variables explicatives
 ```{r}
-library(corrplot)
-
-# Corrélation entre les variables explicatives
 seuil <- 0.9
 
 # Sélection des variables numériques, sans les variables de prix
@@ -1538,8 +1417,98 @@ corrplot(
 )
 ```
 
-# 4) PRÉPARATION FINALE DES VARIABLES POUR LA RÉGRESSION
+### Prix m² des transactions immobilières et zones inondables
+```{r}
+ggplot() +
 
+  # Zones inondables du TRI de Nantes
+  geom_sf(
+    data = inond_nantes,
+    fill = "grey75",
+    color = "grey65",
+    alpha = 0.6,
+    linewidth = 0.15
+  ) +
+
+  # Contours des communes
+  geom_sf(
+    data = communes_tri,
+    fill = NA,
+    color = "grey90",
+    linewidth = 0.25
+  ) +
+
+  # Transactions immobilières
+  geom_sf(
+    data = dvf_zone,
+    aes(color = prix_m2),
+    size = 0.7,
+    alpha = 0.85
+  ) +
+
+  # Dégradé des prix au m²
+  scale_color_gradientn(
+    colours = c(
+      "#FDE725",
+      "#E9E76B",
+      "#B5D96B",
+      "#69BD72",
+      "#F4A259",
+      "#E76F51",
+      "#96344A"
+    ),
+
+    values = scales::rescale(
+      c(0, 1500, 2500, 3500, 4000, 6000, 10000),
+      from = c(0, 10000)
+    ),
+
+    limits = c(0, 10000),
+    oob = scales::squish,
+
+    # Graduations espacées pour éviter le chevauchement
+    breaks = c(0, 1500, 2500, 3500, 4000, 6000, 8000, 10000),
+
+    name = "Prix au m² (€)",
+
+    labels = scales::label_number(
+      big.mark = " ",
+      decimal.mark = ","
+    ),
+
+    guide = guide_colorbar(
+      barheight = grid::unit(5, "cm"),
+      ticks = TRUE,
+      frame.colour = "grey50",
+      title.position = "top",
+      title.hjust = 0.5,
+      label.position = "right"
+    )
+  ) +
+
+  # Titres et sources
+  labs(
+    title = "Prix des transactions immobilières et zones inondables",
+    subtitle = "Territoire du TRI de Nantes, transactions réalisées entre 2022 et 2025",
+    caption = "Sources : DVF, SIGLOIRE (TRI de Nantes), IGN"
+  ) +
+
+  # Mise en forme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10),
+    legend.position = "right",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    panel.grid = element_blank()
+  )
+
+```
+
+# 4) Préparation finale des variables pour la regression  
+
+## 4.1 Effets fixes 
 Création d'une variable combinée pour les effets fixes spatiaux 
 (Quartiers pour Nantes, Communes pour le reste de la métropole)
 
@@ -1556,8 +1525,45 @@ dvf_zone <- dvf_zone |>
 
 ```
 
+## 4.2 Calcul des distances géographiques (en mètres)
 
-# 5) ESTIMATIONS ÉCONOMÉTRIQUES (Modèles de régression)
+```{r}
+
+# Distance à la zone inondable la plus proche
+dvf_zone$dist_inond <- as.numeric(
+  st_distance(dvf_zone, z_tout)
+)
+
+# Fonction de calcul de la distance à l'entité la plus proche
+dist_plus_proche <- function(pts, cible) {
+
+  idx <- st_nearest_feature(pts, cible)
+
+  as.numeric(
+    st_distance(pts, cible[idx, ], by_element = TRUE)
+  )
+}
+
+# Distance aux cours d'eau et plans d'eau
+dvf_zone <- dvf_zone |>
+  mutate(
+    dist_cours_eau = dist_plus_proche(geometry, cours_eau),
+    dist_eau_surf  = dist_plus_proche(geometry, eau_surf),
+    dist_eau       = pmin(dist_cours_eau, dist_eau_surf)
+  )
+
+# Distance au centre de Nantes (Place du Commerce)
+centre_nantes <- st_sfc(
+  st_point(c(355500, 6689500)),
+  crs = 2154
+)
+
+dvf_zone$dist_centre <- as.numeric(
+  st_distance(dvf_zone, centre_nantes)
+)
+```
+
+# 5) Estimmations économétriques 
 
 ```{r}
 
