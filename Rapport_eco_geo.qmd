@@ -1019,6 +1019,63 @@ ncol(dvf_zone)  # Nombre de variables
 ```
 À l'échelle des transactions immobilières, sur les 33 138 observations, 31 598 disposent d'un revenu médian renseigné, tandis que 1 540 sont manquantes. Le revenu médian des IRIS associés aux transactions s'élève à 25 650 €, avec des valeurs comprises entre 13 720 € et 36 290 €.
 
+## 2.6 Base de données quartiers nantes 
+### 2.6.1 Import des données 
+```{r}
+quartiers_nantes <- st_read(
+ "data/Quartier/244400404_quartiers-de-la-ville-de-nantes.shp"
+)
+```
+### 2.6.2 Visualisation de la base de données 
+```{r}
+# Structure des données
+glimpse(quartiers_nantes)
+
+# Noms des variables
+names(quartiers_nantes)
+
+# Nombre de quartiers
+nrow(quartiers_nantes)
+
+quartiers_nantes <- quartiers_nantes |>
+  st_transform(2154)
+
+# Système de coordonnées
+st_crs(quartiers_nantes)
+
+# Afficher les quartiers
+plot(st_geometry(quartiers_nantes))
+```
+
+### 2.6.3 Fusion avec la base de données finale 
+```{r}
+dvf_zone <- dvf_zone |>
+  st_join(
+    quartiers_nantes |> select(Nom_du_quar),
+    join = st_within,
+    left = TRUE
+  ) |>
+  rename(quartier = Nom_du_quar)
+```
+
+### 2.6.4 Stat desc
+```{r}
+# Nombre de transactions par quartier
+dvf_zone |>
+  st_drop_geometry() |>
+  count(quartier, sort = TRUE)
+
+# sans quartier 
+dvf_zone |>
+  st_drop_geometry() |>
+  summarise(
+    total = n(),
+    sans_quartier = sum(is.na(quartier))
+  )
+
+# les transactions sans quartiers sont celles des communes hors Nantes 
+```
+
 # 3) Analyse descriptives et tableau du corps de texte 
 
 ## 3.1 graphique dans le corps du texte 
@@ -1230,6 +1287,18 @@ head(repartition, 30)
 ```
 
 ## 3.2 Analyse univariée 
+
+### Distribution des prix au m²
+
+```{r}
+ggplot(dvf_zone %>% st_drop_geometry(), aes(x = prix_m2)) +
+  geom_histogram(bins = 1000, fill = "#4477AA", color = "white") +
+  scale_x_continuous(labels = label_number(big.mark = " ")) +
+  coord_cartesian(xlim = quantile(dvf_zone$prix_m2, c(.01, .99), na.rm = TRUE)) +
+  labs(title = "Distribution des prix au m²",
+       x = "Prix au m² (€)", y = "Nombre de mutations") +
+  theme_minimal()
+```
 
 ```{r}
 par(mfrow = c(1, 2))
@@ -1508,14 +1577,13 @@ ggplot() +
 
 # 4) Préparation finale des variables pour la regression  
 
-## 4.1 Calcul des distances géographiques (en mètres)
+## 4.1 Calcul des distances géographiques (en km)
 
 ```{r}
-
 # Distance à la zone inondable la plus proche
-dvf_zone$dist_inond <- as.numeric(
+dvf_zone$dist_inond_km <- as.numeric(
   st_distance(dvf_zone, z_tout)
-)
+) / 1000
 
 # Fonction de calcul de la distance à l'entité la plus proche
 dist_plus_proche <- function(pts, cible) {
@@ -1524,15 +1592,15 @@ dist_plus_proche <- function(pts, cible) {
 
   as.numeric(
     st_distance(pts, cible[idx, ], by_element = TRUE)
-  )
+  ) / 1000
 }
 
 # Distance aux cours d'eau et plans d'eau
 dvf_zone <- dvf_zone |>
   mutate(
-    dist_cours_eau = dist_plus_proche(geometry, cours_eau),
-    dist_eau_surf  = dist_plus_proche(geometry, eau_surf),
-    dist_eau       = pmin(dist_cours_eau, dist_eau_surf)
+    dist_cours_eau_km = dist_plus_proche(geometry, cours_eau),
+    dist_eau_surf_km  = dist_plus_proche(geometry, eau_surf),
+    dist_eau_km       = pmin(dist_cours_eau_km, dist_eau_surf_km)
   )
 
 # Distance au centre de Nantes (Place du Commerce)
@@ -1541,58 +1609,69 @@ centre_nantes <- st_sfc(
   crs = 2154
 )
 
-dvf_zone$dist_centre <- as.numeric(
+dvf_zone$dist_centre_km <- as.numeric(
   st_distance(dvf_zone, centre_nantes)
-)
+) / 1000
 ```
 
 ## 4.2 Effets fixes
-Création d'une variable combinée pour les effets fixes spatiaux 
-(Quartiers pour Nantes, Communes pour le reste de la métropole)
+
 
 ```{r}
 dvf_zone <- dvf_zone |>
   mutate(
-    fe_spatial = if_else(code_commune == "44109", as.character(code_iris), as.character(code_commune)),
+    fe_spatial = if_else(
+      code_commune == "44109",
+      as.character(quartier),
+      as.character(code_commune)
+    ),
     log_surface = log(surface_reelle_bati),
-    log_revenu_median = log(revenu_median_iris),
-    dist_inond_km = dist_inond / 1000,
-    dist_cours_eau_km = dist_cours_eau / 1000,
-    dist_centre_km = dist_centre / 1000
+    log_revenu_median = log(revenu_median_iris)
   )
-
 ```
-# 5) Estimmations économétriques 
 
 ```{r}
 
+dvf_zone <- dvf_zone |>
+  mutate(
+    date_mutation = as.Date(date_mutation),
+    mois_vente = month(date_mutation),
+    annee_mois = format(date_mutation, "%Y-%m")
+  )
+```
+
+# 5) Estimmations économétriques 
+
+```{r}
 # --- MODÈLE 1 : Effet moyen de l'exposition binaire ---
 reg_binaire <- feols(
-  log_prix_m2 ~ dans_zone_inond + log_surface + type_local + 
-    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
-    annee_vente + fe_spatial,
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
   data = dvf_zone
 )
 
 # --- MODÈLE 2 : Intensité du risque par catégories ---
 reg_niveau <- feols(
-  log_prix_m2 ~ niveau + log_surface + type_local + 
-    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
-    annee_vente + fe_spatial,
+  log_prix_m2 ~ niveau + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
   data = dvf_zone
 )
 
 # --- MODÈLE 3 : Effet de la distance continue à la zone inondable ---
 reg_distance <- feols(
-  log_prix_m2 ~ dist_inond_km + log_surface + type_local + 
-    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
-    annee_vente + fe_spatial,
+  log_prix_m2 ~ dist_inond_km + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
   data = dvf_zone
 )
 
 # Affichage des résultats comparés
-etable(reg_binaire, reg_niveau, reg_distance, 
-       headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance"))
+etable(
+  reg_binaire, reg_niveau, reg_distance,
+  headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance")
+)
 ```
 
 # 6) Analyse suggestion prof 
