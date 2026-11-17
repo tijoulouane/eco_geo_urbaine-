@@ -1508,24 +1508,7 @@ ggplot() +
 
 # 4) Préparation finale des variables pour la regression  
 
-## 4.1 Effets fixes 
-Création d'une variable combinée pour les effets fixes spatiaux 
-(Quartiers pour Nantes, Communes pour le reste de la métropole)
-
-```{r}
-dvf_zone <- dvf_zone |>
-  mutate(
-    fe_spatial = if_else(code_commune == "44109", as.character(code_iris), as.character(code_commune)),
-    log_surface = log(surface_reelle_bati),
-    log_revenu_median = log(revenu_median_iris),
-    dist_inond_km = dist_inond / 1000,
-    dist_cours_eau_km = dist_cours_eau / 1000,
-    dist_centre_km = dist_centre / 1000
-  )
-
-```
-
-## 4.2 Calcul des distances géographiques (en mètres)
+## 4.1 Calcul des distances géographiques (en mètres)
 
 ```{r}
 
@@ -1563,6 +1546,22 @@ dvf_zone$dist_centre <- as.numeric(
 )
 ```
 
+## 4.2 Effets fixes
+Création d'une variable combinée pour les effets fixes spatiaux 
+(Quartiers pour Nantes, Communes pour le reste de la métropole)
+
+```{r}
+dvf_zone <- dvf_zone |>
+  mutate(
+    fe_spatial = if_else(code_commune == "44109", as.character(code_iris), as.character(code_commune)),
+    log_surface = log(surface_reelle_bati),
+    log_revenu_median = log(revenu_median_iris),
+    dist_inond_km = dist_inond / 1000,
+    dist_cours_eau_km = dist_cours_eau / 1000,
+    dist_centre_km = dist_centre / 1000
+  )
+
+```
 # 5) Estimmations économétriques 
 
 ```{r}
