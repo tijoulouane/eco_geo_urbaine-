@@ -1583,7 +1583,7 @@ seuil_cor <- 0.1
 # Sélection automatique des variables numériques
 variables_num <- dvf_zone |>
   st_drop_geometry() |>
-  select(where(is.numeric))
+  select(where(is.numeric), -`prix_m2`)
 
 # Calcul des corrélations avec le prix au m²
 cor_prix <- sapply(
@@ -1592,8 +1592,7 @@ cor_prix <- sapply(
     cor(x, dvf_zone$log_prix_m2,
         method = "spearman",
         use = "pairwise.complete.obs")
-  }
-)
+  })
 
 # Exclure la corrélation du prix avec lui-même
 cor_prix_filtre <- cor_prix[names(cor_prix) != "log_prix_m2"]
