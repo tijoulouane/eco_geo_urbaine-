@@ -432,7 +432,7 @@ Les mutations restantes sont écartées car leur structure ne permet pas d'ident
 
 Les lots comprenant des jardins ou d'autres éléments ne sont pas pris en compte. Il en va de même lorsque la nature du lot est floue ou non renseignée (NA).
 
-#### 2.1.1.10 RECONSTRUCTION DE LA BASE NETTOYÉE
+#### 2.1.1.10 Reconstruction de la base nettoyé 
 
 On rassemble les différentes catégories de mutations conservées : - mutations simples ; - maisons regroupées ; - appartements avec annexes ; - mutations de plusieurs appartements dont la valeur a été répartie.
 
@@ -441,16 +441,14 @@ dvf_clean <- bind_rows(
   dvf_gardes,
   maisons_regroupees,
   apparts_annexes,
-  apparts_sols
-)
+  apparts_sols)
 ```
 
-#### 2.1.1.11 CRÉATION DES INDICATEURS IMMOBILIERS
+#### 2.1.1.11 Créations des indicateurs immobiliers 
 
 ```{r}
 
 # Calcul du prix au m²
-
 
 dvf_clean <- dvf_clean |>
   mutate(
