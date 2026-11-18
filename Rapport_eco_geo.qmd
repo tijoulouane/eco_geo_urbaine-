@@ -1412,8 +1412,8 @@ ggplot(repartition, aes(x = 2, y = n, fill = type_local)) +
   ) +
   scale_fill_manual(
     values = c(
-      "Maison" = "#BFD8B8",
-      "Appartement" = "#8FB89A")) +
+      "Maison" = "#8C7B9D",
+      "Appartement" = "#C7A27C")) +
   labs(
     title = "Répartition des transactions selon le type de logement",
     fill = "Type de logement") +
@@ -1455,18 +1455,74 @@ ggplot(transactions_communes,
 
 ```{r}
 ggplot() +
-  geom_sf(data = zone_etude,
-          fill = "grey95",
-          color = "grey50") +
-  geom_sf(data = dvf_zone,
-          aes(color = type_local),
-          size = 0.4,
-          alpha = 0.5) +
+  # Fond de la zone d'étude
+  geom_sf(
+    data = zone_etude,
+    fill = "grey96",
+    color = NA
+  ) +
+
+  # Transactions immobilières
+  geom_sf(
+    data = dvf_zone,
+    aes(color = type_local),
+    size = 0.4,
+    alpha = 0.6
+  ) +
+
+  # Contours des quartiers de Nantes
+  geom_sf(
+    data = quartiers_nantes_carte,
+    fill = NA,
+    color = "grey45",
+    linewidth = 0.3
+  ) +
+
+  # Délimitations des communes
+  geom_sf(
+    data = communes_tri,
+    fill = NA,
+    color = "grey75",
+    linewidth = 0.5
+  ) +
+
+  # Couleurs des types de logements
+  scale_color_manual(
+    values = c(
+      "Maison" = "#8F7BA5",
+      "Appartement" = "#C9A27E"
+    ),
+    guide = guide_legend(
+      override.aes = list(
+        size = 3.5,
+        alpha = 1
+      )
+    )
+  ) +
+
   labs(
     title = "Localisation des transactions immobilières",
-    color = "Type de logement"
+    subtitle = "Répartition des transactions selon le type de logement",
+    color = "Type de logement",
+    caption = "Source : données DVF (DGFiP), IGN et Nantes Métropole ; traitements de l'auteur."
   ) +
-  theme_minimal()
+
+  coord_sf(datum = NA) +
+
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(0.9, "cm"),
+    legend.key.width = unit(1.2, "cm"),
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
 ```
 
 ```{r}
