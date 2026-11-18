@@ -171,7 +171,7 @@ summary(dvf_clean$valeur_fonciere)
 
 Présence possible de prix symboliques (cessions). Il est également nécessaire d'examiner le prix au m² pour identifier les valeurs foncières potentiellement atypiques.
 
-Suppression des observations : - sans coordonnées géographiques ; - sans valeur foncière ou avec une valeur inférieure à 10 000 € ; - sans surface bâtie ; - dont la surface est inférieure au seuil retenu selon le type de bien.
+Suppression des observations : sans coordonnées géographiques, sans valeur foncière ou avec une valeur inférieure à 10 000 €, sans surface bâtie, dont la surface est inférieure au seuil retenu selon le type de bien.
 
 #### 2.1.1.7 Suppression de certaines obs
 
@@ -1082,113 +1082,174 @@ dvf_zone |>
 ### Territoire d'étude
 
 ```{r}
-
 # Préparation des communes
 carte_communes <- communes_tri %>%
   mutate(
     categorie = if_else(
       code_insee == "44109",
       "Nantes",
-      "Autres communes"))
+      "Autres communes"
+    )
+  )
 
-# Calcul du centroïde de chaque commune
+# Préparation des quartiers de Nantes
+quartiers_nantes_carte <- quartiers_nantes %>%
+  st_transform(st_crs(carte_communes))
+
+# Calcul des points de placement des noms des communes
 centres_communes <- carte_communes %>%
   st_point_on_surface() %>%
   mutate(
     coord_x = st_coordinates(geometry)[, 1],
-    coord_y = st_coordinates(geometry)[, 2]) %>%
+    coord_y = st_coordinates(geometry)[, 2]
+  ) %>%
   st_drop_geometry()
 
+# Séparation des labels
+centres_autres <- centres_communes %>%
+  filter(code_insee != "44109")
+
+centre_nantes <- centres_communes %>%
+  filter(code_insee == "44109")
+
 # Création de la carte
-ggplot(carte_communes) +
+ggplot() +
+
+  # Communes
   geom_sf(
+    data = carte_communes,
     aes(fill = categorie),
     color = "white",
-    linewidth = 0.4) +
+    linewidth = 0.35
+  ) +
+
+  # Délimitation des quartiers de Nantes
+  geom_sf(
+    data = quartiers_nantes_carte,
+    fill = NA,
+    color = "#91A88A",
+    linewidth = 0.20
+  ) +
+
+  # Noms des autres communes
   geom_text_repel(
-    data = centres_communes,
-    aes(x = coord_x, y = coord_y, label = nom_officiel),
-    size = 3,
+    data = centres_autres,
+    aes(
+      x = coord_x,
+      y = coord_y,
+      label = nom_officiel
+    ),
+    size = 3.2,
+    color = "#26352B",
     seed = 123,
-    min.segment.length = 0) +
+    min.segment.length = 0,
+    segment.color = "grey60",
+    segment.linewidth = 0.2,
+    box.padding = 0.3,
+    point.padding = 0.2
+  ) +
+
+  # Nom de Nantes uniquement
+  geom_text(
+    data = centre_nantes,
+    aes(
+      x = coord_x,
+      y = coord_y,
+      label = nom_officiel
+    ),
+    size = 3.5,
+    fontface = "bold",
+    color = "#26352B"
+  ) +
+
+  # Palette vert clair
   scale_fill_manual(
     values = c(
-      "Nantes" = "#245A78",
-      "Autres communes" = "#91B9CC"),
-    name = NULL) +
+      "Nantes" = "#DCEBD5",
+      "Autres communes" = "#C5DDBD"
+    ),
+    name = NULL
+  ) +
+
   labs(
     title = "Territoire d'étude : les 25 communes retenues",
     subtitle = "Communes intersectant au moins une zone inondable du TRI de Nantes",
-    caption = "Sources : IGN, données communales ; TRI de Nantes"
+    caption = "Sources : IGN, données communales ; Nantes métropole, quartiers nantais ; TRI de Nantes"
   ) +
+
   coord_sf(datum = NA) +
+
   theme_minimal() +
+
   theme(
-    plot.title = element_text(face = "bold", size = 15),
-    plot.subtitle = element_text(size = 10),
+    plot.title = element_text(
+      face = "bold",
+      size = 15,
+      color = "#26352B"
+    ),
+    plot.subtitle = element_text(
+      size = 10.5,
+      color = "#4B5B50"
+    ),
+    plot.caption = element_text(
+      size = 9,
+      color = "grey40"
+    ),
     legend.position = "bottom",
+    legend.text = element_text(size = 10),
     panel.grid = element_blank(),
-    axis.title = element_blank())
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
 
 ```
 
 ### Représentation des trois scénarios
 
-```{r}
-# Vérifier les scénarios disponibles
-table(inond_nantes$scenario)
+```{r}ggplot() +
+  # Fond des communes
+  geom_sf(data = communes_tri, fill = "grey96", color = NA) +
 
-# Préparer les zones inondables
-zones_tri <- inond_nantes %>%
-  mutate(
-    scenario = recode(
-      scenario,
-      "04Fai" = "Faible",
-      "02Moy" = "Moyen",
-      "01For" = "Fort"))
+  # Zones d'inondation
+  geom_sf(data = zones_tri, aes(fill = scenario), color = NA, alpha = 0.8) +
 
-# Réaliser la carte
-ggplot() +
+  # Contours des communes
+  geom_sf(data = communes_tri, fill = NA, color = "grey75", linewidth = 0.3) +
 
-  # Communes du territoire d'étude
-  geom_sf(
-    data = communes_tri,
-    fill = "grey96",
-    color = "grey55",
-    linewidth = 0.3) +
+  # Contours des quartiers de Nantes
+  geom_sf(data = quartiers_nantes_carte, fill = NA, color = "grey75", linewidth = 0.25) +
 
-  # Zones inondables du TRI
-  geom_sf(
-    data = zones_tri,
-    aes(fill = scenario),
-    color = NA,
-    alpha = 0.7) +
-
-
+  # Couleurs des scénarios
   scale_fill_manual(
     values = c(
-      "Faible" = "#F6D77A",
-      "Moyen" = "#E99555",
-      "Fort" = "#C64B4B" ),
-    name = "Scénario d'inondation") +
+      "Faible" = "#F5E6A8",
+      "Moyen" = "#EBA66D",
+      "Fort" = "#CB6460"
+    ),
+    breaks = c("Faible", "Moyen", "Fort"),
+    name = "Scénario d'inondation"
+  ) +
 
   labs(
     title = "Les zones à risque d'inondation du TRI de Nantes",
-    subtitle = "Représentation des trois scénarios cartographiés",
-    caption = "Sources : TRI de Nantes, IGN et OpenStreetMap"
+    subtitle = "Représentation des trois scénarios d'inondation",
+    caption = "Sources : TRI de Nantes, IGN, OpenStreetMap ; Nantes Métropole (quartiers nantais)"
   ) +
 
   coord_sf(datum = NA) +
 
   theme_minimal() +
-
   theme(
-    plot.title = element_text(face = "bold", size = 15),
-    plot.subtitle = element_text(size = 10),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
     legend.position = "bottom",
     panel.grid = element_blank(),
-    axis.title = element_blank())
-
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
 ```
 
 ### Biens situés dans et hors zone inondable
