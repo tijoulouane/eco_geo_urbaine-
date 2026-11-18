@@ -1274,13 +1274,13 @@ ggplot() +
 
 ```{r}
 ggplot() +
-  # Contours des IRIS
+  # Fond de la zone d'étude
   geom_sf(
-    data = iris_sf,
-    fill = NA,
-    color = "grey65",
-    linewidth = 0.2
+    data = zone_etude,
+    fill = "grey96",
+    color = NA
   ) +
+
   # Transactions colorées selon le revenu médian
   geom_sf(
     data = dvf_zone,
@@ -1288,41 +1288,56 @@ ggplot() +
     size = 0.6,
     alpha = 0.75
   ) +
+
+  # Contours des quartiers de Nantes
+  geom_sf(
+    data = quartiers_nantes_carte,
+    fill = NA,
+    color = "grey45",
+    linewidth = 0.3
+  ) +
+
+  # Délimitations des communes
+  geom_sf(
+    data = communes_tri,
+    fill = NA,
+    color = "grey75",
+    linewidth = 0.5
+  ) +
+
+  # Palette du revenu médian
   scale_color_viridis_c(
     name = "Revenu médian\n(€/UC)",
     option = "viridis",
-    na.value = "grey80"
+    na.value = "grey80",
+    guide = guide_colorbar(
+      barheight = unit(5, "cm"),
+      title.position = "top"
+    )
   ) +
+
   labs(
     title = "Revenu médian associé aux transactions immobilières",
     subtitle = "Répartition des transactions selon le revenu médian de leur IRIS",
-    caption = "Sources : DVF, INSEE Filosofi 2021, IGN"
+    caption = "Sources : DVF, INSEE Filosofi 2021, IGN ; traitements de l'auteur."
   ) +
+
+  coord_sf(datum = NA) +
+
   theme_minimal() +
   theme(
-    plot.title = element_text(
-      face = "bold",
-      size = 15,
-      hjust = 0
-    ),
-    plot.subtitle = element_text(
-      size = 10,
-      color = "grey35"
-    ),
-    plot.caption = element_text(
-      size = 8,
-      color = "grey45",
-      hjust = 1
-    ),
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11, color = "grey35"),
+    plot.caption = element_text(size = 8, color = "black", hjust = 1),
     legend.title = element_text(face = "bold", size = 10),
     legend.text = element_text(size = 9),
+    legend.position = "right",
     panel.grid = element_blank(),
     axis.title = element_blank(),
     axis.text = element_blank(),
     axis.ticks = element_blank(),
     plot.margin = margin(15, 15, 15, 15)
   )
-
 ```
 
 De manière cohérente on observe que les zone ayant des revenu médian plus important sont au niveau du centre ville de nantes.
@@ -1531,19 +1546,32 @@ exposition <- dvf_zone |>
   count(niveau, name = "nombre_transactions")
 
 ggplot(exposition,
-       aes(x = niveau, y = nombre_transactions)) +
-  geom_col(fill = "pink") +
+       aes(x = niveau, y = nombre_transactions, fill = niveau)) +
+  geom_col(width = 0.7) +
   geom_text(
     aes(label = nombre_transactions),
     vjust = -0.5,
     size = 4
+  ) +
+  scale_fill_manual(
+    values = c(
+      "hors zone" = "#D9D9D9",
+      "faible" = "#F5E6A8",
+      "moyen" = "#EBA66D",
+      "fort" = "#CB6460"
+    )
   ) +
   labs(
     title = "Répartition des transactions selon l'exposition au risque d'inondation",
     x = "Niveau d'exposition",
     y = "Nombre de transactions"
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    legend.position = "none",
+    panel.grid.major.x = element_blank()
+  )
 ```
 
 ## 3.3 Analyse bivariée
