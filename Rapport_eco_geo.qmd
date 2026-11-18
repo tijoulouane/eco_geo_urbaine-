@@ -1208,7 +1208,8 @@ ggplot() +
 
 ### Représentation des trois scénarios
 
-```{r}ggplot() +
+```{r}
+ggplot() +
   # Fond des communes
   geom_sf(data = communes_tri, fill = "grey96", color = NA) +
 
@@ -1354,11 +1355,19 @@ head(repartition, 30)
 
 ```{r}
 ggplot(dvf_zone %>% st_drop_geometry(), aes(x = prix_m2)) +
-  geom_histogram(bins = 1000, fill = "#4477AA", color = "white") +
-  scale_x_continuous(labels = label_number(big.mark = " ")) +
-  coord_cartesian(xlim = quantile(dvf_zone$prix_m2, c(.01, .99), na.rm = TRUE)) +
-  labs(title = "Distribution des prix au m²",
-       x = "Prix au m² (€)", y = "Nombre de mutations") +
+  geom_histogram(
+    bins = 50,
+    fill = "#BFD8B8",
+    color = "white",
+    na.rm = TRUE) +
+  scale_x_continuous(
+    labels = scales::label_number(big.mark = " ", decimal.mark =",")) +
+  coord_cartesian(
+    xlim = quantile(dvf_zone$prix_m2, c(0.01, 0.99), na.rm = TRUE)) +
+  labs(
+    title = "Distribution des prix au m²",
+    x = "Prix au m² (€)",
+    y = "Nombre de mutations") +
   theme_minimal()
 ```
 
@@ -1366,10 +1375,14 @@ ggplot(dvf_zone %>% st_drop_geometry(), aes(x = prix_m2)) +
 par(mfrow = c(1, 2))
 
 boxplot(dvf_zone$valeur_fonciere,
+        col = "#BFD8B8",
+        border = "grey40",
         main = "Distribution des valeurs foncières",
         ylab = "Valeur foncière (€)")
 
 boxplot(dvf_zone$prix_m2,
+        col = "#8FB89A",
+        border = "grey40",
         main = "Distribution des prix au m²",
         ylab = "Prix au m² (€)")
 ```
@@ -1385,16 +1398,28 @@ repartition <- dvf_zone |>
   count(type_local) |>
   mutate(
     proportion = n / sum(n) * 100,
-    etiquette = paste0(type_local, "\n", round(proportion, 1), " %")
-  )
+    etiquette = paste0(type_local, "\n", round(proportion, 1), " %"))
 
-# Diagramme en camembert
-pie(
-  repartition$n,
-  labels = repartition$etiquette,
-  main = "Répartition des transactions selon le type de logement",
-  col = c("lightblue", "lightpink")
-)
+# Diagramme en anneau
+ggplot(repartition, aes(x = 2, y = n, fill = type_local)) +
+  geom_col(color = "white", linewidth = 1) +
+  coord_polar(theta = "y") +
+  xlim(0.5, 2.5) +
+  geom_text(
+    aes(label = paste0(round(proportion, 1), " %")),
+    position = position_stack(vjust = 0.5),
+    size = 4
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Maison" = "#BFD8B8",
+      "Appartement" = "#8FB89A")) +
+  labs(
+    title = "Répartition des transactions selon le type de logement",
+    fill = "Type de logement") +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),legend.position = "bottom")
 
 ```
 
@@ -1405,8 +1430,7 @@ dvf_zone |>
   summarise(
     nombre_transactions = n(),
     prix_moyen_m2 = mean(prix_m2, na.rm = TRUE),
-    prix_median_m2 = median(prix_m2, na.rm = TRUE)
-  )
+    prix_median_m2 = median(prix_m2, na.rm = TRUE))
 ```
 
 ```{r}
