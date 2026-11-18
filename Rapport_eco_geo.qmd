@@ -17,6 +17,10 @@ library(viridis)
 library(ggrepel)
 library(corrplot)
 library(scales)
+library(lmtest)
+library(tseries)
+library(nortest)
+library(car)
 ```
 
 # 2) Import des données
@@ -1585,6 +1589,7 @@ variables_num <- dvf_zone |>
   st_drop_geometry() |>
   select(where(is.numeric), -`prix_m2`)
 
+
 # Calcul des corrélations avec le prix au m²
 cor_prix <- sapply(
   variables_num,
@@ -1781,7 +1786,6 @@ dvf_zone$dist_centre_km <- as.numeric(
 ) / 1000
 ```
 
-## 4.2  
 
 ## 4.3 Effets fixes
 
@@ -1796,6 +1800,14 @@ dvf_zone <- dvf_zone |>
     log_surface = log(surface_reelle_bati),
     log_revenu_median = log(revenu_median_iris)
   )
+
+carre <- function(taille) {
+  g <- st_make_grid(zone_etude, cellsize = taille)
+  vapply(st_intersects(dvf_zone, g),
+         function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+}
+dvf_zone$carreau    <- carre(1000)
+dvf_zone$carreau500 <- carre(500)
 ```
 
 ```{r}
@@ -1808,39 +1820,373 @@ dvf_zone <- dvf_zone |>
   )
 ```
 
-# 5) Estimmations économétriques
-
+# 5) Estimations économétriques
 ```{r}
-# --- MODÈLE 1 : Effet moyen de l'exposition binaire ---
+# modèle
 reg_binaire <- feols(
   log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
     dist_cours_eau_km + dist_centre_km + log_revenu_median |
     annee_mois + fe_spatial,
-  data = dvf_zone
-)
+  data = dvf_zone, cluster = ~carreau)
 
-# --- MODÈLE 2 : Intensité du risque par catégories ---
-reg_niveau <- feols(
-  log_prix_m2 ~ niveau + log_surface + type_local +
-    dist_cours_eau_km + dist_centre_km + log_revenu_median |
-    annee_mois + fe_spatial,
-  data = dvf_zone
-)
+# base
+d_mod <- dvf_zone |> st_drop_geometry() |> slice(obs(reg_binaire))
+d_mod$res <- resid(reg_binaire)
+d_mod$fit <- fitted(reg_binaire)
 
-# --- MODÈLE 3 : Effet de la distance continue à la zone inondable ---
-reg_distance <- feols(
-  log_prix_m2 ~ dist_inond_km + log_surface + type_local +
-    dist_cours_eau_km + dist_centre_km + log_revenu_median |
-    annee_mois + fe_spatial,
-  data = dvf_zone
-)
+m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_cours_eau_km +
+             dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial),
+           data = d_mod)
 
-# Affichage des résultats comparés
-etable(
-  reg_binaire, reg_niveau, reg_distance,
-  headers = c("Modèle Binaire", "Modèle Catégories", "Modèle Distance")
-)
+# Normalité des résidus
+qqnorm(d_mod$res, main = "QQ-plot des résidus"); qqline(d_mod$res, col = "red")
+
+hist(d_mod$res, breaks = 80, freq = FALSE, main = "Distribution des résidus", xlab = "Résidu")
+curve(dnorm(x, mean(d_mod$res), sd(d_mod$res)), add = TRUE, col = "red", lwd = 2)
 ```
+```{r}
+ad.test(d_mod$res) 
+```
+p value inférieure, asymétrie confirmée
+```{r}
+# ---- 0. Paramètres ----
+champ_quartier <- "Nom_du_quar"
+code_nantes    <- "44109"
+centre_nantes  <- st_sfc(st_point(c(355500, 6689500)), crs = 2154)   # Place du Commerce, approx.
+
+# ---- 1. Filtre de Tukey (bornes calculées AVANT filtre, par type de bien) ----
+bornes_prix <- dvf_clean |>
+  group_by(type_local) |>
+  summarise(q1 = quantile(log(prix_m2), .25), q3 = quantile(log(prix_m2), .75),
+            bas  = exp(q1 - 1.5 * (q3 - q1)),
+            haut = exp(q3 + 1.5 * (q3 - q1)), .groups = "drop")
+print(bornes_prix)
+
+dvf_clean_2 <- dvf_clean |>
+  left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
+  filter(prix_m2 >= bas, prix_m2 <= haut) |>
+  select(-bas, -haut)
+
+cat("Filtre de Tukey :", nrow(dvf_clean) - nrow(dvf_clean_2), "lignes retirées sur",
+    nrow(dvf_clean), "\n")
+
+# ---- 2. Objet spatial restreint à la zone d'étude ----
+dvf_zone_2 <- dvf_clean_2 |>
+  filter(!is.na(longitude), !is.na(latitude)) |>
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  st_transform(2154) |>
+  st_filter(zone_etude)
+
+# ---- 3. Variables de risque ----
+z_tout <- st_union(inond_nantes)
+union_sc <- function(motif) {
+  g <- inond_nantes |> filter(str_detect(str_to_lower(scenario), motif))
+  if (nrow(g) == 0) NULL else st_union(g)
+}
+z_fort <- union_sc("for"); z_moyen <- union_sc("moy"); z_faible <- union_sc("fai")
+
+dans <- function(pts, zone) {
+  if (is.null(zone)) return(rep(FALSE, length(pts)))
+  lengths(st_intersects(pts, zone)) > 0
+}
+
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(dans_zone_inond = dans(geometry, z_tout),
+         dans_fort       = dans(geometry, z_fort),
+         dans_moyen      = dans(geometry, z_moyen),
+         dans_faible     = dans(geometry, z_faible),
+         niveau = case_when(dans_fort   ~ "fort",
+                            dans_moyen  ~ "moyen",
+                            dans_faible ~ "faible",
+                            TRUE        ~ "hors zone"),
+         niveau = factor(niveau, levels = c("hors zone", "faible", "moyen", "fort")))
+
+# ---- 4. Distances (mètres, puis km) ----
+dist_proche <- function(pts, cible) {
+  idx <- st_nearest_feature(pts, cible)
+  as.numeric(st_distance(pts, cible[idx, ], by_element = TRUE))
+}
+zone_tampon <- st_buffer(zone_etude, 5000)     # allège le calcul : on ne garde que l'eau proche de la zone
+ce <- st_filter(cours_eau, zone_tampon)
+es <- st_filter(eau_surf,  zone_tampon)
+
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(dist_inond_km     = as.numeric(st_distance(geometry, z_tout)) / 1000,
+         dist_cours_eau_km = dist_proche(geometry, ce) / 1000,
+         dist_eau_surf_km  = dist_proche(geometry, es) / 1000,
+         dist_eau_km       = pmin(dist_cours_eau_km, dist_eau_surf_km),
+         dist_centre_km    = as.numeric(st_distance(geometry, centre_nantes)) / 1000)
+
+# ---- 5. Revenu médian de l'IRIS (un seul IRIS par vente, sans dupliquer de lignes) ----
+iris_sf  <- st_transform(iris_sf, 2154)
+idx_iris <- vapply(st_intersects(dvf_zone_2, iris_sf),
+                   function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+
+dvf_zone_2$code_iris          <- iris_sf$code_iris[idx_iris]
+dvf_zone_2$revenu_median_iris <- iris_sf$revenu_median_iris[idx_iris]
+dvf_zone_2$log_revenu_median  <- log(dvf_zone_2$revenu_median_iris)
+
+# ---- 6. Effet fixe spatial : quartier pour Nantes, commune ailleurs ----
+idx_q  <- vapply(st_intersects(dvf_zone_2, quartiers_nantes),
+                 function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+manque <- which(dvf_zone_2$code_commune == code_nantes & is.na(idx_q))   # Nantes, hors polygones
+if (length(manque)) idx_q[manque] <- st_nearest_feature(dvf_zone_2[manque, ], quartiers_nantes)
+
+dvf_zone_2$quartier <- as.character(quartiers_nantes[[champ_quartier]][idx_q])
+
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(fe_spatial = if_else(code_commune == code_nantes,
+                              paste0("Q_", quartier), paste0("C_", code_commune)))
+
+# ---- 7. Carreaux (erreurs-types et robustesse) ----
+carre <- function(taille) {
+  g <- st_make_grid(zone_etude, cellsize = taille)
+  vapply(st_intersects(dvf_zone_2, g),
+         function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+}
+dvf_zone_2$carreau    <- carre(1000)
+dvf_zone_2$carreau500 <- carre(500)
+
+# ---- 8. Variables temporelles et transformations ----
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(date_mutation = as.Date(date_mutation),
+         annee_vente   = year(date_mutation),
+         annee_mois    = format(date_mutation, "%Y-%m"),
+         log_prix_m2   = log(prix_m2),
+         log_surface   = log(surface_reelle_bati))
+
+# ---- 9. Contrôles ----
+cat("\nVentes :", nrow(dvf_zone_2), "\n")
+cat("En zone inondable :", sum(dvf_zone_2$dans_zone_inond),
+    sprintf("(%.1f %%)\n", 100 * mean(dvf_zone_2$dans_zone_inond)))
+
+dvf_zone_2 |> st_drop_geometry() |>
+  select(log_revenu_median, fe_spatial, carreau, carreau500, dist_eau_km, dist_centre_km) |>
+  summarise(across(everything(), ~ sum(is.na(.x)))) |> print()    # seul le revenu doit avoir des NA
+
+cat("Zones fe_spatial :", n_distinct(dvf_zone_2$fe_spatial), "\n")
+print(summary(dvf_zone_2$prix_m2))                                # doit respecter les bornes de Tukey
+print(dvf_zone_2 |> st_drop_geometry() |> count(type_local, dans_zone_inond))
+
+dvf_zone_2 |> st_drop_geometry() |>
+  group_by(fe_spatial) |>
+  summarise(expo = any(dans_zone_inond), non_expo = any(!dans_zone_inond), .groups = "drop") |>
+  summarise(zones = n(), zones_mixtes = sum(expo & non_expo)) |> print()
+
+# modèle de base 
+reg_filtre <- feols(
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
+  data = dvf_zone_2)
+```
+
+
+## 5.1 estimation, 3 modèles, avant et après filtre
+```{r}
+if (!"carreau" %in% names(dvf_zone)) {
+  g <- st_make_grid(zone_etude, cellsize = 1000)
+  dvf_zone$carreau <- vapply(st_intersects(dvf_zone, g),
+                             function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+}
+
+controles <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km + log_revenu_median"
+
+specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
+           niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
+           distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
+
+estimer <- function(data, var, fe = "fe_spatial")
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
+        data = data, cluster = ~carreau)
+
+bases <- list(avant = dvf_zone, apres = dvf_zone_2)
+m <- map(specs, \(v) map(bases, \(d) estimer(d, v)))     # m$binaire$avant, m$niveau$apres, etc.
+
+iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
+                                headers = c("Avant filtre", "Après filtre"), title = nom)))
+```
+
+## 5.2 diagnostic des résidus
+```{r}
+diag_modele <- function(reg, data_sf, var, k = 8) {
+  pts <- data_sf[obs(reg), ]                       # observations réellement utilisées
+  d   <- st_drop_geometry(pts); d$res <- resid(reg)
+
+  # Version lm (effets fixes en facteurs) : nécessaire pour RESET, Breusch-Pagan, VIF
+  m_lm <- lm(update(reg$fml, . ~ . + factor(annee_mois) + factor(fe_spatial)), data = d)
+
+  nb <- knn2nb(knearneigh(st_coordinates(pts), k = k))
+  jb <- jarque.bera.test(d$res);  ad <- ad.test(d$res);  li <- lillie.test(d$res)
+  rs <- resettest(m_lm, power = 2:3, type = "fitted");  bp <- bptest(m_lm)
+  mo <- moran.test(d$res, nb2listw(nb, style = "W"))
+  vf <- car::vif(m_lm)
+
+  tribble(
+    ~indicateur,                    ~stat,                          ~p,
+    "Observations",                 length(d$res),                  NA,
+    "Asymétrie",                    moments::skewness(d$res),       NA,
+    "Aplatissement (normale = 3)",  moments::kurtosis(d$res),       NA,
+    "Résidu minimal",               min(d$res),                     NA,
+    "Jarque-Bera",                  unname(jb$statistic),           jb$p.value,
+    "Anderson-Darling",             unname(ad$statistic),           ad$p.value,
+    "Lilliefors (D)",               unname(li$statistic),           li$p.value,
+    "RESET",                        unname(rs$statistic),           rs$p.value,
+    "Breusch-Pagan",                unname(bp$statistic),           bp$p.value,
+    "I de Moran",                   unname(mo$estimate[1]),         mo$p.value,
+    "VIF de la variable d'intérêt", unname(vf[var, 3]^2),           NA)   # GVIF ajusté² : VIF pour 1 ddl
+}
+
+diag <- imap_dfr(m, \(x, nom) bind_rows(
+  diag_modele(x$avant, dvf_zone,   specs[[nom]]) |> mutate(modele = nom, etape = "avant"),
+  diag_modele(x$apres, dvf_zone_2, specs[[nom]]) |> mutate(modele = nom, etape = "apres")))
+```
+
+```{r}
+#| results: asis
+fmt_p <- \(p) ifelse(is.na(p), "—",
+                     ifelse(p < 2.2e-16, "< 2,2e-16",
+                            formatC(p, format = "e", digits = 1, decimal.mark = ",")))
+fmt_s <- \(x, ind) ifelse(ind == "Observations",
+                          formatC(x, format = "d", big.mark = " "),
+                          formatC(x, format = "f", digits = 3, big.mark = " ", decimal.mark = ","))
+
+# Écart à la valeur de référence (3 pour l'aplatissement, 0 pour les autres indicateurs)
+ecart <- \(x, ind) abs(x - ifelse(ind == "Aplatissement (normale = 3)", 3, 0))
+sans_variation <- c("Observations", "VIF de la variable d'intérêt")
+
+tab <- diag |>
+  pivot_wider(names_from = etape, values_from = c(stat, p)) |>
+  mutate(variation = 100 * (ecart(stat_apres, indicateur) - ecart(stat_avant, indicateur)) /
+                     ecart(stat_avant, indicateur),
+         variation = ifelse(indicateur %in% sans_variation, NA, variation),
+         evolution = case_when(is.na(variation) ~ "—",
+                               variation < 0    ~ "amélioration",
+                               TRUE             ~ "dégradation"),
+         across(c(stat_avant, stat_apres), \(x) fmt_s(x, indicateur)),
+         across(c(p_avant, p_apres), fmt_p),
+         variation = ifelse(is.na(variation), "—", formatC(variation, format = "f", digits = 1, decimal.mark = ",")))
+
+options(width = 200)
+
+tableau_diag <- function(nom) {
+  tab |> filter(modele == nom) |>
+    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
+                               "p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
+}
+
+tableau_diag("binaire")
+
+tableau_diag <- function(nom) {
+  tab |> filter(modele == nom) |>
+    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
+                               "p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
+}
+
+tableau_diag("niveau")
+
+tableau_diag <- function(nom) {
+  tab |> filter(modele == nom) |>
+    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
+                               "p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
+}
+
+tableau_diag("distance")
+```
+
+## 5.3 vérification de la neutralité du filtre
+```{r}
+retire <- dvf_zone |> st_drop_geometry() |>
+  left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
+  mutate(retiree = prix_m2 < bas | prix_m2 > haut,
+         bande = cut(dist_inond_km, c(-1, 0, .25, .5, 1, Inf),
+                     labels = c("dans la zone", "0-250 m", "250-500 m", "500 m-1 km", "> 1 km")))
+
+# Modèle 1 : dans / hors zone
+retire |> group_by(type_local, dans_zone_inond) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2), .groups = "drop")
+# Modèle 2 : par catégorie d'exposition
+retire |> group_by(niveau) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
+# Modèle 3 : par distance à la zone
+retire |> group_by(bande) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
+
+# Effectifs par catégorie sur la base filtrée (modèle 2)
+dvf_zone_2 |> st_drop_geometry() |> count(niveau)
+```
+
+```{r}
+dm     <- filter(dvf_zone_2, !is.na(log_revenu_median))
+fe_ech <- c(z35 = "fe_spatial", c500 = "carreau500")
+m_ech  <- map(specs, \(v) map(fe_ech, \(f) estimer(dm, v, f)))
+
+iwalk(m_ech, \(x, nom) print(etable(x$z35, x$c500, keep = specs[[nom]],
+                                    headers = c("35 zones", "Carreaux 500 m"), title = nom)))
+
+wald(m$niveau$apres, keep = "niveau")     # test conjoint des trois catégories (modèle 2)
+```
+## 5.4 vérification vif et comparaison résultats
+
+```{r}
+x     <- c("dans_zone_inond", "dist_inond_km", "niveau")
+y      <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km +
+              log_revenu_median + factor(annee_mois) + factor(fe_spatial)"
+for (var in x) {
+  f    <- as.formula(paste("log_prix_m2 ~", x, "+", y))
+  reg <- lm(f, data = d_mod)
+  print(vif(reg))}
+```
+reteste des résultats sans dist centre
+
+```{r}
+if (!"carreau" %in% names(dvf_zone)) {
+  g <- st_make_grid(zone_etude, cellsize = 1000)
+  dvf_zone$carreau <- vapply(st_intersects(dvf_zone, g),
+                             function(i) if (length(i)) i[1] else NA_integer_, integer(1))
+}
+
+controles <- "log_surface + type_local + dist_cours_eau_km + log_revenu_median"
+
+specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
+           niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
+           distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
+
+estimer <- function(data, var, fe = "fe_spatial")
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
+        data = data, cluster = ~carreau)
+
+bases <- list(avant = dvf_zone, apres = dvf_zone_2)
+m <- map(specs, \(v) map(bases, \(d) estimer(d, v)))     # m$binaire$avant, m$niveau$apres, etc.
+
+iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
+                                headers = c("Avant filtre", "Après filtre"), title = nom)))
+```
+
+
+
+## 5.5 comparaison modèle plus fin
+```{r}
+reg_c500 <- feols(
+log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median | annee_mois + carreau500, data = dvf_zone_2, cluster = ~carreau)
+
+res500 <- resid(reg_c500)
+pts500 <- dvf_zone_2 |> slice(obs(reg_c500))
+nb500  <- knn2nb(knearneigh(st_coordinates(pts500), k = 8))
+moran.test(res500, nb2listw(nb500, style = "W"))
+```
+attention pas le même nombre de données
+Il reste un I de 0,19, très significatif. Même en comparant des biens situés dans le même carreau de 500 m, les résidus restent corrélés dans l’espace. Cela peut venir de caractéristiques locales non observées qui varient plus finement que le carreau (immeuble, rue, vue), ou de la structure des voisins : des ventes situées dans un même immeuble ont presque les mêmes coordonnées.
+
+meilleur i de moran (0.30 sinon)
+
+
 
 # 6) Analyse suggestion prof
 
