@@ -4,7 +4,7 @@ format: html
 editor: visual
 ---
 
-# 1) Packages 
+# 1) Packages
 
 ```{r}
 library(sf)
@@ -19,7 +19,8 @@ library(corrplot)
 library(scales)
 ```
 
-# 2) Import des données 
+# 2) Import des données
+
 ## 2.1 Base de données DVF
 
 ```{r}
@@ -41,21 +42,29 @@ lire_annee <- function(annee) {
   message("Importation des données DVF : ", annee)
 
   tryCatch({
-    donnees <- read_csv(
-      url_dvf(annee, dept),
-      col_types = cols(.default = col_character()),
-        show_col_types = FALSE )
+    # Télécharger le fichier compressé dans un fichier temporaire
+    fichier <- tempfile(fileext = ".csv.gz")
+    download.file(url_dvf(annee, dept), fichier, mode = "wb", quiet = TRUE)
+
+    # Lire le CSV avec R de base (toutes les colonnes en texte)
+    donnees <- read.csv(
+      gzfile(fichier),
+      colClasses = "character",
+      na.strings = "",
+      encoding = "UTF-8"
+    )
+
     # Ajouter une colonne indiquant l'année des transactions
     donnees <- donnees |>
+      tibble::as_tibble() |>
       mutate(annee = annee)
+
     return(donnees)
   }, error = function(e) {
-
-    # Signaler si une année n'a pas pu être téléchargée
-    warning(
-      "Impossible d'importer l'année ", annee, " : ",
-      conditionMessage(e))
-return(NULL)})}
+    warning("Impossible d'importer l'année ", annee, " : ", conditionMessage(e))
+    return(NULL)
+  })
+}
 
 
 #  IMPORTER ET REGROUPER TOUTES LES ANNÉES
@@ -65,8 +74,10 @@ liste_dvf <- map(annees, lire_annee)
 dvf_brut <- list_rbind(liste_dvf)
 
 ```
-### 2.1.1 Nettoyage et analyse de la base 
-#### 2.1.1.1 Analyse descriptive 
+
+### 2.1.1 Nettoyage et analyse de la base
+
+#### 2.1.1.1 Analyse descriptive
 
 ```{r}
 # Afficher les dimensions de la base
@@ -96,19 +107,19 @@ dvf <- dvf_brut |>
     latitude                  = as.numeric(latitude))
 ```
 
-#### 2.1.1.3 Observations des modalitées 
+#### 2.1.1.3 Observations des modalitées
 
 ```{r}
 unique(dvf$type_local)
 unique(dvf$nature_culture)
 unique(dvf$nature_mutation)
 ```
+
 On conserve les mutations de type Vente car on veut étudier les transactions immobilières effectivement réalisées et leurs prix de vente.
 
 On autorise uniquement les natures de culture "sols" et NA, pour privilégier les terrains bâtis et éviter d'intégrer des terrains agricoles ou d'autres biens non pertinents, tout en conservant les observations dont la nature n'est pas renseignée.
 
-On conserve uniquement les Maisons et appartements. 
-
+On conserve uniquement les Maisons et appartements.
 
 Attention limite de l'étude : cette hypothèse peut également exclure certaines observations pertinentes.
 
@@ -138,7 +149,6 @@ Présence de maisons et d'appartements de très petites surfaces et de très gra
 
 Analyse des quantiles par type de bien :
 
-
 ```{r}
 dvf_clean |>
   group_by(type_local) |>
@@ -150,27 +160,20 @@ dvf_clean |>
     .groups = "drop"
   )
 ```
-Seuils de surface retenus :
-- 9 m² pour les appartements (référence à la loi Carrez). 
-- 20 m² pour les maisons (seuil de sélection retenu dans notre étude).
 
+Seuils de surface retenus : - 9 m² pour les appartements (référence à la loi Carrez). - 20 m² pour les maisons (seuil de sélection retenu dans notre étude).
 
 #### 2.1.1.6 Analyse des valeurs foncières et premiers filtres
+
 ```{r}
 summary(dvf_clean$valeur_fonciere)
 ```
 
-Présence possible de prix symboliques (cessions).
-Il est également nécessaire d'examiner le prix au m² pour identifier les valeurs foncières potentiellement atypiques.
+Présence possible de prix symboliques (cessions). Il est également nécessaire d'examiner le prix au m² pour identifier les valeurs foncières potentiellement atypiques.
 
- Suppression des observations :
- - sans coordonnées géographiques ;
- - sans valeur foncière ou avec une valeur inférieure à 10 000 € ;
- - sans surface bâtie ;
- - dont la surface est inférieure au seuil retenu selon le type de bien.
+Suppression des observations : - sans coordonnées géographiques ; - sans valeur foncière ou avec une valeur inférieure à 10 000 € ; - sans surface bâtie ; - dont la surface est inférieure au seuil retenu selon le type de bien.
 
-
-#### 2.1.1.7 Suppression de certaines obs 
+#### 2.1.1.7 Suppression de certaines obs
 
 ```{r}
 dvf_clean <- dvf_clean |>
@@ -184,9 +187,10 @@ dvf_clean <- dvf_clean |>
       (type_local == "Maison" & surface_reelle_bati >= 20))
 ```
 
+#### 2.1.1.8 Traitement des doublons et mutations multiples
 
-#### 2.1.1.8 Traitement des doublons et mutations multiples 
 ##### 2.1.1.9 Identification des mutations simples et multiples
+
 ```{r}
 # On distingue les mutations contenant une seule ligne de celles contenant plusieurs lignes.
 
@@ -203,7 +207,6 @@ dvf_gardes <- dvf_clean |>
 dvf_elimines <- dvf_clean |>
   filter(!id_mutation %in% mutations_simples)
 ```
-
 
 ```{r}
 # Vérification du nombre de lignes et de mutations concernées
@@ -229,9 +232,7 @@ dvf_elimines |>
 
 ##### 2.1.1.10 Identification des ventes mixtes
 
-Certaines mutations comprennent plusieurs types de biens  (par exemple : maison + appartement).
-La valeur foncière étant globale, il est impossible de déterminer précisément la valeur de chaque bien.
-
+Certaines mutations comprennent plusieurs types de biens (par exemple : maison + appartement). La valeur foncière étant globale, il est impossible de déterminer précisément la valeur de chaque bien.
 
 ```{r}
 ventes_mixtes <- dvf_elimines |>
@@ -251,7 +252,7 @@ dvf_elimines <- dvf_elimines |>
 
 ```
 
-##### 2.1.1.11 Traitement des mutations multiples de maisons 
+##### 2.1.1.11 Traitement des mutations multiples de maisons
 
 ```{r}
 
@@ -349,14 +350,11 @@ dvf_elimines |>
 
 ```
 
-Interprétation :
-Pour les maisons, les mutations restantes correspondent à des ventes comportant plusieurs maisons ou parcelles pour une seule valeur foncière. Il est impossible de déterminer précisément
+Interprétation : Pour les maisons, les mutations restantes correspondent à des ventes comportant plusieurs maisons ou parcelles pour une seule valeur foncière. Il est impossible de déterminer précisément
 
-##### 2.1.1.12 Traitement des mutations multiples d'appartements 
+##### 2.1.1.12 Traitement des mutations multiples d'appartements
 
-
-Pour les appartements, il s'agit principalement de ventes en lots.
-Le filtre sur la surface bâtie permet d'écarter les petites annexes (garages, caves, etc.) et de conserver les appartements.
+Pour les appartements, il s'agit principalement de ventes en lots. Le filtre sur la surface bâtie permet d'écarter les petites annexes (garages, caves, etc.) et de conserver les appartements.
 
 ```{r}
 #  Lots comprenant un appartement et des annexes
@@ -427,19 +425,16 @@ nrow(dvf_elimines)
 dvf_elimines |>
   count(type_local)
 ```
+
 Il reste environ 2 901 lignes dans les mutations multiples, dont 1 254 maisons et 1 647 appartements.
 
-Les mutations restantes sont écartées car leur structure ne  permet pas d'identifier correctement les biens et leur valeur.
+Les mutations restantes sont écartées car leur structure ne permet pas d'identifier correctement les biens et leur valeur.
 
 Les lots comprenant des jardins ou d'autres éléments ne sont pas pris en compte. Il en va de même lorsque la nature du lot est floue ou non renseignée (NA).
 
 #### 2.1.1.10 RECONSTRUCTION DE LA BASE NETTOYÉE
 
-On rassemble les différentes catégories de mutations conservées :
- - mutations simples ;
- - maisons regroupées ;
- - appartements avec annexes ;
- - mutations de plusieurs appartements dont la valeur a été répartie.
+On rassemble les différentes catégories de mutations conservées : - mutations simples ; - maisons regroupées ; - appartements avec annexes ; - mutations de plusieurs appartements dont la valeur a été répartie.
 
 ```{r}
 dvf_clean <- bind_rows(
@@ -481,8 +476,7 @@ dvf_clean |>
   head(15) 
 ```
 
-On conserve les valeurs extrêmes du prix au m² pour le moment.
-Elles seront examinées ultérieurement afin de déterminer si certaines observations doivent être écartées.
+On conserve les valeurs extrêmes du prix au m² pour le moment. Elles seront examinées ultérieurement afin de déterminer si certaines observations doivent être écartées.
 
 ```{r}
 # Transformation logarithmique prix au m² et année de vente
@@ -494,7 +488,7 @@ dvf_clean <- dvf_clean |>
     annee_vente = lubridate::year(date_mutation))
 ```
 
-#### 2.1.1.12 Derniere vérif et sauvegarde 
+#### 2.1.1.12 Derniere vérif et sauvegarde
 
 ```{r}
 
@@ -539,18 +533,17 @@ st_write(
 
 ```
 
-## 2.2 Base de données IGN, contours communes 
+## 2.2 Base de données IGN, contours communes
 
- - IGN (Admin Express) : limites administratives des communes.
- - OpenStreetMap (Geofabrik) : cours d'eau et surfaces en eau.
+-   IGN (Admin Express) : limites administratives des communes.
+-   OpenStreetMap (Geofabrik) : cours d'eau et surfaces en eau.
 
 Toutes les données sont harmonisées en Lambert-93 (EPSG:2154), afin de permettre les calculs de distances en mètres.
 
-### 2.2.1 Import des données 
+### 2.2.1 Import des données
 
-Les données IGN sont récupérées via un service WFS.
-Le téléchargement est réalisé par lots de 5 000 observations afin de pouvoir récupérer les couches volumineuses sans dépasser les limites du service.
- 
+Les données IGN sont récupérées via un service WFS. Le téléchargement est réalisé par lots de 5 000 observations afin de pouvoir récupérer les couches volumineuses sans dépasser les limites du service.
+
 ```{r}
 
 wfs_get <- function(base_url, layer, bbox = NULL,
@@ -597,7 +590,7 @@ st_transform(resultat, 2154)
 }
 
 ```
- 
+
 ```{r}
 ign <- "https://data.geopf.fr/wfs/ows"
 
@@ -631,8 +624,8 @@ dep_44 <- st_union(communes_44)
 saveRDS(communes_44, "data/communes_44.rds")
 
 ```
- 
-## 2.3 Base de données Réseaux d'eau naturel 
+
+## 2.3 Base de données Réseaux d'eau naturel
 
 ```{r}
 # Extraction des données hydrographiques (OSM)
@@ -665,13 +658,10 @@ list.files("data/osm", recursive = TRUE)
 
 ```
 
-### 2.3.1 Extraction des cours d'eau 
+### 2.3.1 Extraction des cours d'eau
 
- On conserve les principaux types de cours d'eau :
- - river : rivières et fleuves ;
- - stream : ruisseaux ;
- - canal : canaux.
- 
+On conserve les principaux types de cours d'eau : - river : rivières et fleuves ; - stream : ruisseaux ; - canal : canaux.
+
 ```{r}
 # Les données sont ensuite reprojetées en Lambert-93.
 
@@ -681,11 +671,10 @@ cours_eau <- read_sf(
   filter(fclass %in% c("river", "stream", "canal")) |>
   st_transform(2154)
 ```
- 
+
 ### 2.3.2 Extraction des surfaces en eau
 
-Récupération des plans d'eau et surfaces hydrographiques :
-Loire, estuaire, étangs et autres surfaces en eau.
+Récupération des plans d'eau et surfaces hydrographiques : Loire, estuaire, étangs et autres surfaces en eau.
 
 ```{r}
 # Ces données sont représentées sous forme de polygones.
@@ -696,8 +685,8 @@ eau_surf <- read_sf(
   st_transform(2154)
 ```
 
+### 2.3.3 Nettoyage de la base
 
-### 2.3.3 Nettoyage de la base 
 ```{r}
 #  Restriction à la zone d'étude : Loire-Atlantique
 
@@ -743,8 +732,9 @@ saveRDS(
 
 ```
 
-## 2.4 Base de données Zones innondable TRI 
-### 2.4.1 Import 
+## 2.4 Base de données Zones innondable TRI
+
+### 2.4.1 Import
 
 ```{r}
 
@@ -769,7 +759,7 @@ table(inond_nantes$scenario, useNA = "ifany")
 st_crs(inond_nantes)
 ```
 
-### 2.4.2 Définition de la zone d'étude et fusion des bases 
+### 2.4.2 Définition de la zone d'étude et fusion des bases
 
 ```{r}
 # Communes intersectant les zones inondables
@@ -784,7 +774,7 @@ dvf_zone <- dvf_sf |>
   st_filter(zone_etude)
 ```
 
-### 2.4.3 Construction par scénario 
+### 2.4.3 Construction par scénario
 
 ```{r}
 
@@ -839,7 +829,6 @@ dvf_zone <- dvf_zone |>
       levels = c("hors zone", "faible", "moyen", "fort")))
 ```
 
-
 ### 2.4.5 Vérifications et statistiques descriptives
 
 ```{r}
@@ -877,9 +866,10 @@ saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
 
 ```
 
-
 ## 2.5 Base de données iris ( revenu médian )
-### 2.5.1 Import 
+
+### 2.5.1 Import
+
 ```{r}
 
 dir.create("data/revenus_iris", recursive = TRUE, showWarnings = FALSE)
@@ -911,8 +901,7 @@ glimpse(revenus_iris)
 names(revenus_iris)
 ```
 
-
-### 2.5.2 Nettoyage 
+### 2.5.2 Nettoyage
 
 ```{r}
 
@@ -930,8 +919,11 @@ summary(revenus_iris$revenu_median_iris)
 # Vérification des doublons
 revenus_iris |> count(code_iris) |> filter(n > 1)
 ```
+
 moyenne et médiane proche du revenu et pas de doublons 
+
 ### 2.5.3 Importation des contours IRIS (IGN)
+
 ```{r}
 
 bbox <- st_bbox(zone_etude)
@@ -964,8 +956,7 @@ names(iris_sf)
 glimpse(iris_sf)
 ```
 
-
-### 2.5.4 Jointure 
+### 2.5.4 Jointure
 
 ```{r}
 
@@ -986,6 +977,7 @@ iris_sf |>
     n_sans_revenu = sum(is.na(revenu_median_iris))
   )
 ```
+
 La base de données comprend 266 IRIS, dont 206 disposent d'un revenu médian renseigné, tandis que 60 présentent des données manquantes (soit 22,6 %). Le revenu médian des IRIS s'élève à 25 625 €, avec des valeurs comprises entre 13 280 € et 36 290 €.
 
 ### 2.5.5 Rattachement du revenu médian aux transactions DVF
@@ -1017,16 +1009,21 @@ saveRDS(dvf_zone, "data/dvf_zone_nantes.rds")
 nrow(dvf_zone)  # Nombre d'observations
 ncol(dvf_zone)  # Nombre de variables
 ```
+
 À l'échelle des transactions immobilières, sur les 33 138 observations, 31 598 disposent d'un revenu médian renseigné, tandis que 1 540 sont manquantes. Le revenu médian des IRIS associés aux transactions s'élève à 25 650 €, avec des valeurs comprises entre 13 720 € et 36 290 €.
 
-## 2.6 Base de données quartiers nantes 
-### 2.6.1 Import des données 
+## 2.6 Base de données quartiers nantes
+
+### 2.6.1 Import des données
+
 ```{r}
 quartiers_nantes <- st_read(
  "data/Quartier/244400404_quartiers-de-la-ville-de-nantes.shp"
 )
 ```
-### 2.6.2 Visualisation de la base de données 
+
+### 2.6.2 Visualisation de la base de données
+
 ```{r}
 # Structure des données
 glimpse(quartiers_nantes)
@@ -1047,7 +1044,8 @@ st_crs(quartiers_nantes)
 plot(st_geometry(quartiers_nantes))
 ```
 
-### 2.6.3 Fusion avec la base de données finale 
+### 2.6.3 Fusion avec la base de données finale
+
 ```{r}
 dvf_zone <- dvf_zone |>
   st_join(
@@ -1059,6 +1057,7 @@ dvf_zone <- dvf_zone |>
 ```
 
 ### 2.6.4 Stat desc
+
 ```{r}
 # Nombre de transactions par quartier
 dvf_zone |>
@@ -1076,10 +1075,12 @@ dvf_zone |>
 # les transactions sans quartiers sont celles des communes hors Nantes 
 ```
 
-# 3) Analyse descriptives et tableau du corps de texte 
+# 3) Analyse descriptives et tableau du corps de texte
 
-## 3.1 graphique dans le corps du texte 
+## 3.1 graphique dans le corps du texte
+
 ### Territoire d'étude
+
 ```{r}
 
 # Préparation des communes
@@ -1130,7 +1131,9 @@ ggplot(carte_communes) +
     axis.title = element_blank())
 
 ```
+
 ### Représentation des trois scénarios
+
 ```{r}
 # Vérifier les scénarios disponibles
 table(inond_nantes$scenario)
@@ -1188,7 +1191,6 @@ ggplot() +
 
 ```
 
-
 ### Biens situés dans et hors zone inondable
 
 ```{r}
@@ -1206,10 +1208,8 @@ ggplot() +
   theme_minimal()
 ```
 
-
-
-
 ### Cartographie du niveau de vie médian par IRIS
+
 ```{r}
 ggplot() +
   # Contours des IRIS
@@ -1262,9 +1262,10 @@ ggplot() +
   )
 
 ```
-De manière cohérente on observe que les zone ayant des revenu médian plus important sont au niveau du centre ville de nantes. 
 
-###  Répartition des biens exposés par commune
+De manière cohérente on observe que les zone ayant des revenu médian plus important sont au niveau du centre ville de nantes.
+
+### Répartition des biens exposés par commune
 
 ```{r}
 
@@ -1286,7 +1287,7 @@ repartition <- dvf_zone |>
 head(repartition, 30)
 ```
 
-## 3.2 Analyse univariée 
+## 3.2 Analyse univariée
 
 ### Distribution des prix au m²
 
@@ -1315,7 +1316,6 @@ boxplot(dvf_zone$prix_m2,
 ```{r}
 summary(dvf_zone$prix_m2)
 ```
-
 
 ```{r}
 # Calcul des effectifs
@@ -1368,7 +1368,6 @@ ggplot(transactions_communes,
   theme_minimal()
 ```
 
-
 ```{r}
 ggplot() +
   geom_sf(data = zone_etude,
@@ -1384,7 +1383,6 @@ ggplot() +
   ) +
   theme_minimal()
 ```
-
 
 ```{r}
 exposition <- dvf_zone |>
@@ -1407,7 +1405,8 @@ ggplot(exposition,
   theme_minimal()
 ```
 
-## 3.3 Analyse bivariée 
+## 3.3 Analyse bivariée
+
 ### 3.3.1 Corrélation entre le prix immobilier et les variables explicatives
 
 ```{r}
@@ -1430,10 +1429,10 @@ cor_prix <- sapply(
 )
 
 # Exclure la corrélation du prix avec lui-même
-cor_prix <- cor_prix[names(cor_prix) != "log_prix_m2"]
+cor_prix_filtre <- cor_prix[names(cor_prix) != "log_prix_m2"]
 
 # Filtrer les corrélations selon le seuil
-cor_prix_filtre <- cor_prix[abs(cor_prix) >= seuil_cor]
+cor_prix_filtre <- cor_prix_filtre[abs(cor_prix) >= seuil_cor]
 cor_prix_filtre <- sort(cor_prix_filtre)
 
 # Palette de couleurs
@@ -1448,7 +1447,7 @@ barplot(
   horiz = TRUE,
   las = 1,
   col = cols,
-  main = paste0("Corrélations avec le prix immobilier (|r| ≥ ", seuil_cor, ")"),
+  main = paste0("Corrélations avec le prix au m² (|r| ≥ ", seuil_cor, ")"),
   xlab = "Coefficient de corrélation",
   cex.names = 0.75
 )
@@ -1457,6 +1456,7 @@ abline(v = 0, col = "grey40", lty = 2)
 ```
 
 ### 3.3.2 Corrélation entre les variables explicatives
+
 ```{r}
 seuil <- 0.9
 
@@ -1487,6 +1487,7 @@ corrplot(
 ```
 
 ### Prix m² des transactions immobilières et zones inondables
+
 ```{r}
 ggplot() +
 
@@ -1575,7 +1576,7 @@ ggplot() +
 
 ```
 
-# 4) Préparation finale des variables pour la regression  
+# 4) Préparation finale des variables pour la regression
 
 ## 4.1 Calcul des distances géographiques (en km)
 
@@ -1614,8 +1615,9 @@ dvf_zone$dist_centre_km <- as.numeric(
 ) / 1000
 ```
 
-## 4.2 Effets fixes
+## 4.2  
 
+## 4.3 Effets fixes
 
 ```{r}
 dvf_zone <- dvf_zone |>
@@ -1640,7 +1642,7 @@ dvf_zone <- dvf_zone |>
   )
 ```
 
-# 5) Estimmations économétriques 
+# 5) Estimmations économétriques
 
 ```{r}
 # --- MODÈLE 1 : Effet moyen de l'exposition binaire ---
@@ -1674,9 +1676,10 @@ etable(
 )
 ```
 
-# 6) Analyse suggestion prof 
+# 6) Analyse suggestion prof
 
-variable post a été supprimée en raison d'une collinéarité. code momdifié 
+variable post a été supprimée en raison d'une collinéarité. code momdifié
+
 ```{r}
 # 1. Création d'une variable binaire temporelle simple (Avant 2024 vs 2024-2025)
 dvf_zone <- dvf_zone |>
@@ -1694,4 +1697,3 @@ reg_interaction_propres <- feols(
 # Affichage du résultat de l'interaction
 etable(reg_interaction_propres)
 ```
-
