@@ -21,6 +21,7 @@ library(lmtest)
 library(tseries)
 library(nortest)
 library(car)
+library(spdep)
 ```
 
 # 2) Import des données
@@ -1748,14 +1749,12 @@ ggplot() +
 ```
 
 # 4) Préparation finale des variables pour la regression
-
 ## 4.1 Calcul des distances géographiques (en km)
 
 ```{r}
 # Distance à la zone inondable la plus proche
 dvf_zone$dist_inond_km <- as.numeric(
-  st_distance(dvf_zone, z_tout)
-) / 1000
+  st_distance(dvf_zone, z_tout)) / 1000
 
 # Fonction de calcul de la distance à l'entité la plus proche
 dist_plus_proche <- function(pts, cible) {
@@ -1763,98 +1762,108 @@ dist_plus_proche <- function(pts, cible) {
   idx <- st_nearest_feature(pts, cible)
 
   as.numeric(
-    st_distance(pts, cible[idx, ], by_element = TRUE)
-  ) / 1000
-}
+    st_distance(pts, cible[idx, ], by_element = TRUE)) / 1000}
 
 # Distance aux cours d'eau et plans d'eau
 dvf_zone <- dvf_zone |>
   mutate(
     dist_cours_eau_km = dist_plus_proche(geometry, cours_eau),
     dist_eau_surf_km  = dist_plus_proche(geometry, eau_surf),
-    dist_eau_km       = pmin(dist_cours_eau_km, dist_eau_surf_km)
-  )
+    dist_eau_km       = pmin(dist_cours_eau_km, dist_eau_surf_km))
 
 # Distance au centre de Nantes (Place du Commerce)
 centre_nantes <- st_sfc(
   st_point(c(355500, 6689500)),
-  crs = 2154
-)
+  crs = 2154)
 
 dvf_zone$dist_centre_km <- as.numeric(
-  st_distance(dvf_zone, centre_nantes)
-) / 1000
+  st_distance(dvf_zone, centre_nantes)) / 1000
 ```
 
 
-## 4.3 Effets fixes
+## 4.2 Effets fixes et création de varibales 
 
 ```{r}
+# Effets fixes géographique quartier pour nantes et communes. 
 dvf_zone <- dvf_zone |>
   mutate(
     fe_spatial = if_else(
       code_commune == "44109",
       as.character(quartier),
-      as.character(code_commune)
-    ),
+      as.character(code_commune)),
+    # Créations des variables de controle en log 
     log_surface = log(surface_reelle_bati),
-    log_revenu_median = log(revenu_median_iris)
-  )
+    log_revenu_median = log(revenu_median_iris))
+
+# Création des carrées pour le regroupement spatial des transactions afin de calculer des erreurs standards robustes au regroupement spatial.
 
 carre <- function(taille) {
   g <- st_make_grid(zone_etude, cellsize = taille)
   vapply(st_intersects(dvf_zone, g),
-         function(i) if (length(i)) i[1] else NA_integer_, integer(1))
-}
+         function(i) if (length(i)) i[1] else NA_integer_, integer(1))}
 dvf_zone$carreau    <- carre(1000)
 dvf_zone$carreau500 <- carre(500)
 ```
 
 ```{r}
-
+# Création de l'effet fixe temporelle (mois)
 dvf_zone <- dvf_zone |>
   mutate(
     date_mutation = as.Date(date_mutation),
     mois_vente = month(date_mutation),
-    annee_mois = format(date_mutation, "%Y-%m")
-  )
+    annee_mois = format(date_mutation, "%Y-%m"))
 ```
 
 # 5) Estimations économétriques
+## 5.1 Normalité des résidus 
+
 ```{r}
-# modèle
+# Modèle Binaire avec variable de contrôle, effet fixe et clusterisation
 reg_binaire <- feols(
   log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
     dist_cours_eau_km + dist_centre_km + log_revenu_median |
     annee_mois + fe_spatial,
-  data = dvf_zone, cluster = ~carreau)
+  data = dvf_zone, cluster = ~carreau) # carreau de 1km 
 
-# base
+# Extraction des observations, des résidus et des valeurs prédites
 d_mod <- dvf_zone |> st_drop_geometry() |> slice(obs(reg_binaire))
 d_mod$res <- resid(reg_binaire)
 d_mod$fit <- fitted(reg_binaire)
 
-m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_cours_eau_km +
-             dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial),
-           data = d_mod)
+# Réestimation du modèle sous forme de régression linéaire classique
 
+m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_cours_eau_km + dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial), data = d_mod)
+
+# Vérification graphique de la normalité des résidus
 # Normalité des résidus
-qqnorm(d_mod$res, main = "QQ-plot des résidus"); qqline(d_mod$res, col = "red")
+qqnorm(d_mod$res, main = "QQ-plot des résidus") 
+qqline(d_mod$res, col = "red")
 
 hist(d_mod$res, breaks = 80, freq = FALSE, main = "Distribution des résidus", xlab = "Résidu")
 curve(dnorm(x, mean(d_mod$res), sd(d_mod$res)), add = TRUE, col = "red", lwd = 2)
 ```
+Les résidus présentent une asymétrie à gauche et des écarts importants à la droite théorique notamment dans les queues de distribution.
+
 ```{r}
 ad.test(d_mod$res) 
 ```
+Test d'Anderson-Darling : la p-value est inférieure à 2,2e-16.
+L'hypothèse de normalité des résidus est donc rejetée au seuil de 5 %.
 p value inférieure, asymétrie confirmée
+
+Nous décidons alors d'appliquer un filtrage de Tukey sur les prix au m².
+L'objectif est d'améliorer la distribution des résidus, puis de réestimer le modèle et de comparer les résultats avant et après filtrage pour vérifier leur robustesse.
+
+## 5.2 Filtre de Tukey
+
+Après cette étape de filtrage, nous reprenons l’ensemble des opérations précédemment réalisées pour constituer notre base d’analyse : délimitation de la zone d’étude, identification des transactions situées en zone inondable, calcul des distances aux cours d’eau et au centre-ville, intégration du revenu médian par IRIS, puis création des variables explicatives et des effets fixes spatiaux et temporels. Enfin, nous reconstruisons les maillages spatiaux utilisés pour le regroupement des erreurs standards, afin de pouvoir réestimer le modèle économétrique sur cet échantillon filtré et comparer les résultats avec ceux obtenus initialement.
 ```{r}
-# ---- 0. Paramètres ----
+# Paramètres 
 champ_quartier <- "Nom_du_quar"
 code_nantes    <- "44109"
 centre_nantes  <- st_sfc(st_point(c(355500, 6689500)), crs = 2154)   # Place du Commerce, approx.
 
-# ---- 1. Filtre de Tukey (bornes calculées AVANT filtre, par type de bien) ----
+# Filtre de Tukey (bornes calculées AVANT filtre, par type de bien) 
 bornes_prix <- dvf_clean |>
   group_by(type_local) |>
   summarise(q1 = quantile(log(prix_m2), .25), q3 = quantile(log(prix_m2), .75),
@@ -1862,22 +1871,30 @@ bornes_prix <- dvf_clean |>
             haut = exp(q3 + 1.5 * (q3 - q1)), .groups = "drop")
 print(bornes_prix)
 
+# Suppression des transactions présentant des prix extrêmes
+# On conserve uniquement les transactions dont le prix au m² se situe entre les bornes de Tukey calculées précédemment.
+
 dvf_clean_2 <- dvf_clean |>
   left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
   filter(prix_m2 >= bas, prix_m2 <= haut) |>
   select(-bas, -haut)
 
-cat("Filtre de Tukey :", nrow(dvf_clean) - nrow(dvf_clean_2), "lignes retirées sur",
-    nrow(dvf_clean), "\n")
+# Nombre de transactions supprimées
+cat("Filtre de Tukey :", nrow(dvf_clean) - nrow(dvf_clean_2), "lignes retirées sur",nrow(dvf_clean), "\n")
 
-# ---- 2. Objet spatial restreint à la zone d'étude ----
+# 2805 lignes retirées sur 61138 
+
+
+# Création de la base spatiale restreinte au territoire d'étude
 dvf_zone_2 <- dvf_clean_2 |>
   filter(!is.na(longitude), !is.na(latitude)) |>
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
   st_transform(2154) |>
   st_filter(zone_etude)
 
-# ---- 3. Variables de risque ----
+# Identification de l'exposition aux zones inondables
+# On identifie les transactions situées dans les zones inondables et on distingue les trois niveaux d'exposition : faible, moyen et fort.
+
 z_tout <- st_union(inond_nantes)
 union_sc <- function(motif) {
   g <- inond_nantes |> filter(str_detect(str_to_lower(scenario), motif))
@@ -1901,15 +1918,20 @@ dvf_zone_2 <- dvf_zone_2 |>
                             TRUE        ~ "hors zone"),
          niveau = factor(niveau, levels = c("hors zone", "faible", "moyen", "fort")))
 
-# ---- 4. Distances (mètres, puis km) ----
+# Calcul des distances aux zones inondables et aux points d'eau
+# On calcule les distances entre chaque transaction et la zone inondable, les cours d'eau, les surfaces en eau et le centre de Nantes. Les distances sont exprimées en kilomètres.
+
+# Fonction de calcul de la distance à l'objet géographique le plus proche
 dist_proche <- function(pts, cible) {
   idx <- st_nearest_feature(pts, cible)
-  as.numeric(st_distance(pts, cible[idx, ], by_element = TRUE))
-}
-zone_tampon <- st_buffer(zone_etude, 5000)     # allège le calcul : on ne garde que l'eau proche de la zone
+  as.numeric(st_distance(pts, cible[idx, ], by_element = TRUE))}
+
+# Limitation du réseau hydrographique à proximité de la zone d'étude
+zone_tampon <- st_buffer(zone_etude, 5000)    
 ce <- st_filter(cours_eau, zone_tampon)
 es <- st_filter(eau_surf,  zone_tampon)
 
+# Calcul des distances
 dvf_zone_2 <- dvf_zone_2 |>
   mutate(dist_inond_km     = as.numeric(st_distance(geometry, z_tout)) / 1000,
          dist_cours_eau_km = dist_proche(geometry, ce) / 1000,
@@ -1917,7 +1939,9 @@ dvf_zone_2 <- dvf_zone_2 |>
          dist_eau_km       = pmin(dist_cours_eau_km, dist_eau_surf_km),
          dist_centre_km    = as.numeric(st_distance(geometry, centre_nantes)) / 1000)
 
-# ---- 5. Revenu médian de l'IRIS (un seul IRIS par vente, sans dupliquer de lignes) ----
+
+# Association des revenus médians aux transactions
+
 iris_sf  <- st_transform(iris_sf, 2154)
 idx_iris <- vapply(st_intersects(dvf_zone_2, iris_sf),
                    function(i) if (length(i)) i[1] else NA_integer_, integer(1))
@@ -1926,7 +1950,9 @@ dvf_zone_2$code_iris          <- iris_sf$code_iris[idx_iris]
 dvf_zone_2$revenu_median_iris <- iris_sf$revenu_median_iris[idx_iris]
 dvf_zone_2$log_revenu_median  <- log(dvf_zone_2$revenu_median_iris)
 
-# ---- 6. Effet fixe spatial : quartier pour Nantes, commune ailleurs ----
+# Construction des effets fixes géographiques
+# On attribue à chaque transaction un quartier pour Nantes et une commune pour les autres communes. Cette variable servira à intégrer les effets fixes spatiaux dans les estimations.
+
 idx_q  <- vapply(st_intersects(dvf_zone_2, quartiers_nantes),
                  function(i) if (length(i)) i[1] else NA_integer_, integer(1))
 manque <- which(dvf_zone_2$code_commune == code_nantes & is.na(idx_q))   # Nantes, hors polygones
@@ -1938,7 +1964,7 @@ dvf_zone_2 <- dvf_zone_2 |>
   mutate(fe_spatial = if_else(code_commune == code_nantes,
                               paste0("Q_", quartier), paste0("C_", code_commune)))
 
-# ---- 7. Carreaux (erreurs-types et robustesse) ----
+# clusterisation 
 carre <- function(taille) {
   g <- st_make_grid(zone_etude, cellsize = taille)
   vapply(st_intersects(dvf_zone_2, g),
@@ -1947,7 +1973,8 @@ carre <- function(taille) {
 dvf_zone_2$carreau    <- carre(1000)
 dvf_zone_2$carreau500 <- carre(500)
 
-# ---- 8. Variables temporelles et transformations ----
+# Création des variables temporelles et transformations logarithmiques
+# On extrait l'année et le mois de chaque transaction, puis on construit les variables logarithmiques utilisées dans les régressions.
 dvf_zone_2 <- dvf_zone_2 |>
   mutate(date_mutation = as.Date(date_mutation),
          annee_vente   = year(date_mutation),
@@ -1955,91 +1982,252 @@ dvf_zone_2 <- dvf_zone_2 |>
          log_prix_m2   = log(prix_m2),
          log_surface   = log(surface_reelle_bati))
 
-# ---- 9. Contrôles ----
+# Vérification de la base après filtrage et traitements spatiaux
+
+# Nombre de transactions et part située en zone inondable
 cat("\nVentes :", nrow(dvf_zone_2), "\n")
 cat("En zone inondable :", sum(dvf_zone_2$dans_zone_inond),
     sprintf("(%.1f %%)\n", 100 * mean(dvf_zone_2$dans_zone_inond)))
-
+# Vérification des valeurs manquantes
 dvf_zone_2 |> st_drop_geometry() |>
   select(log_revenu_median, fe_spatial, carreau, carreau500, dist_eau_km, dist_centre_km) |>
   summarise(across(everything(), ~ sum(is.na(.x)))) |> print()    # seul le revenu doit avoir des NA
 
+# Nombre de zones géographiques
 cat("Zones fe_spatial :", n_distinct(dvf_zone_2$fe_spatial), "\n")
-print(summary(dvf_zone_2$prix_m2))                                # doit respecter les bornes de Tukey
+
+# Vérification de la distribution des prix
+print(summary(dvf_zone_2$prix_m2))                                
+# doit respecter les bornes de Tukey
+# Répartition des transactions selon le type de bien et l'exposition
 print(dvf_zone_2 |> st_drop_geometry() |> count(type_local, dans_zone_inond))
 
+# Vérification de la présence de transactions exposées et non exposées dans chaque zone géographique
 dvf_zone_2 |> st_drop_geometry() |>
   group_by(fe_spatial) |>
   summarise(expo = any(dans_zone_inond), non_expo = any(!dans_zone_inond), .groups = "drop") |>
   summarise(zones = n(), zones_mixtes = sum(expo & non_expo)) |> print()
 
-# modèle de base 
+# Estimation du modèle économétrique après filtrage
+# On estime à nouveau le modèle binaire sur la base filtrée afin de comparer les résultats avec ceux obtenus avant le filtrage de Tukey.
+
 reg_filtre <- feols(
   log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
     dist_cours_eau_km + dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
   data = dvf_zone_2)
 ```
+Après application du filtre de Tukey, 2 805 transactions ont été supprimées sur les 61 138 observations initiales, soit environ 4,6 %. Le nouvel échantillon comprend ainsi 32 560 transactions situées dans le périmètre du TRI de Nantes, dont 2 250 en zone inondable (6,9 %). Il reste composé majoritairement d'appartements (22 587 ventes) et compte 35 zones géographiques, dont 18 comportent à la fois des biens exposés et non exposés au risque d'inondation.
 
 
-## 5.1 estimation, 3 modèles, avant et après filtre
+### 5.2.1 Vérification de la neutralité du filtre
+
+Vérification si le filtre de Tukey supprime les transactions de manière équilibrée selon leur exposition au risque d'inondation.
 ```{r}
-if (!"carreau" %in% names(dvf_zone)) {
-  g <- st_make_grid(zone_etude, cellsize = 1000)
-  dvf_zone$carreau <- vapply(st_intersects(dvf_zone, g),
-                             function(i) if (length(i)) i[1] else NA_integer_, integer(1))
-}
+retire <- dvf_zone |> st_drop_geometry() |>
+  left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
+  mutate(retiree = prix_m2 < bas | prix_m2 > haut,
+         bande = cut(dist_inond_km, c(-1, 0, .25, .5, 1, Inf),
+                     labels = c("dans la zone", "0-250 m", "250-500 m", "500 m-1 km", "> 1 km")))
 
-controles <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km + log_revenu_median"
+# Modèle 1 : dans / hors zone
+retire |> group_by(type_local, dans_zone_inond) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2), .groups = "drop")
+# Modèle 2 : par catégorie d'exposition
+retire |> group_by(niveau) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
+# Modèle 3 : par distance à la zone
+retire |> group_by(bande) |>
+  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
 
-specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
-           niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
-           distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
-
-estimer <- function(data, var, fe = "fe_spatial")
-  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
-        data = data, cluster = ~carreau)
-
-bases <- list(avant = dvf_zone, apres = dvf_zone_2)
-m <- map(specs, \(v) map(bases, \(d) estimer(d, v)))     # m$binaire$avant, m$niveau$apres, etc.
-
-iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
-                                headers = c("Avant filtre", "Après filtre"), title = nom)))
+# Effectifs par catégorie sur la base filtrée (modèle 2)
+dvf_zone_2 |> st_drop_geometry() |> count(niveau)
 ```
+Le filtre de Tukey supprime une proportion limitée et globalement comparable de transactions entre les biens exposés et non exposés au risque d’inondation, ne révélant pas de biais de sélection manifeste selon leur niveau d’exposition
 
-## 5.2 diagnostic des résidus
+### 5.2.2 Comparaison de la distribution des prix au m² avant et après le filtre de Tukey
+
 ```{r}
-diag_modele <- function(reg, data_sf, var, k = 8) {
-  pts <- data_sf[obs(reg), ]                       # observations réellement utilisées
-  d   <- st_drop_geometry(pts); d$res <- resid(reg)
+comparaison_prix <- data.frame(
+  Indicateur = c("Minimum", "1er quartile", "Médiane", "Moyenne",
+                 "3e quartile", "Maximum"),
+  Avant_filtre = as.numeric(summary(dvf_zone$prix_m2)),
+  Apres_filtre = as.numeric(summary(dvf_zone_2$prix_m2)))
 
-  # Version lm (effets fixes en facteurs) : nécessaire pour RESET, Breusch-Pagan, VIF
-  m_lm <- lm(update(reg$fml, . ~ . + factor(annee_mois) + factor(fe_spatial)), data = d)
+print(comparaison_prix)
+```
+6      Maximum  17682.92683     8620.690
 
-  nb <- knn2nb(knearneigh(st_coordinates(pts), k = k))
-  jb <- jarque.bera.test(d$res);  ad <- ad.test(d$res);  li <- lillie.test(d$res)
-  rs <- resettest(m_lm, power = 2:3, type = "fitted");  bp <- bptest(m_lm)
-  mo <- moran.test(d$res, nb2listw(nb, style = "W"))
-  vf <- car::vif(m_lm)
+Le filtre de Tukey réduit fortement l’influence des valeurs extrêmes : le prix minimum passe de 61 € à 1 169 €/m² et le maximum de 17 683 € à 8 621 €/m². En revanche, la médiane et la moyenne évoluent très peu, ce qui montre que le filtre élimine principalement les valeurs atypiques sans modifier significativement le niveau général des prix.
 
+## 5.3 Estimation, 3 modèles, avant et après filtre
+
+```{r}
+
+# Modèle 1 : exposition binaire au risque d'inondation
+
+modele1_avant <- feols(
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone,
+  cluster = ~carreau
+)
+
+modele1_apres <- feols(
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone_2,
+  cluster = ~carreau
+)
+
+
+# Modèle 2 : niveau d'exposition au risque d'inondation
+
+modele2_avant <- feols(
+  log_prix_m2 ~ niveau + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone,
+  cluster = ~carreau
+)
+
+modele2_apres <- feols(
+  log_prix_m2 ~ niveau + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone_2,
+  cluster = ~carreau
+)
+
+
+# Modèle 3 : distance à la zone inondable
+
+modele3_avant <- feols(
+  log_prix_m2 ~ dist_inond_km + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone,
+  cluster = ~carreau
+)
+
+modele3_apres <- feols(
+  log_prix_m2 ~ dist_inond_km + log_surface + type_local +
+    dist_cours_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone_2,
+  cluster = ~carreau
+)
+
+
+# RESULTATS 
+# Comparaison du modèle 1
+etable(
+  modele1_avant, modele1_apres,
+  headers = c("Avant filtre", "Après filtre"),
+  title = "Modèle 1 : Exposition binaire"
+)
+
+# Comparaison du modèle 2
+etable(
+  modele2_avant, modele2_apres,
+  headers = c("Avant filtre", "Après filtre"),
+  title = "Modèle 2 : Niveau d'exposition"
+)
+
+# Comparaison du modèle 3
+etable(
+  modele3_avant, modele3_apres,
+  headers = c("Avant filtre", "Après filtre"),
+  title = "Modèle 3 : Distance à la zone inondable"
+)
+
+```
+Les résultats obtenus après le filtre de Tukey sont très proches de ceux observés avant filtrage, ce qui confirme la stabilité globale des estimations, comme souligné dans le rapport. Le coefficient associé à l’exposition binaire reste positif et non significatif (0,0342 après filtrage) : nous ne mettons donc pas en évidence de décote immobilière liée au fait de se situer en zone inondable. De même, les coefficients des différents niveaux de risque évoluent très peu : seul le niveau de risque fort présente un coefficient positif significatif au seuil de 10 %, un résultat contraire à l’effet négatif initialement attendu. Enfin, le coefficient de la distance à la zone inondable reste négatif et significatif au seuil de 10 %, indiquant que les prix au m² tendent à diminuer lorsque l'on s'éloigne de ces zones.
+
+Ainsi, conformément à ce qui est indiqué dans le rapport, le filtrage modifie peu les résultats : les coefficients conservent globalement les mêmes signes et les mêmes ordres de grandeur. Il permet surtout de travailler sur un échantillon dont la distribution des prix est moins affectée par les valeurs extrêmes.
+
+## 5.4 Diagnostic des résidus
+
+```{r, warning=FALSE}
+# Fonction de diagnostic des résidus
+diagnostic_residus <- function(reg, data_sf, var, k = 8) {
+
+  # Récupération des observations utilisées dans la régression
+  donnees <- data_sf[obs(reg), ]
+
+  # Suppression de la géométrie et récupération des résidus
+  donnees <- st_drop_geometry(donnees)
+  donnees$residus <- resid(reg)
+
+  #  Réestimation du modèle avec lm pour réaliser certains tests
+  modele_lm <- lm(
+    update(reg$fml, . ~ . + factor(annee_mois) + factor(fe_spatial)),
+    data = donnees)
+
+  # 3Construction du voisinage spatial (8 plus proches voisins)
+  coordonnees <- st_coordinates(data_sf[obs(reg), ])
+  voisins <- knn2nb(knearneigh(coordonnees, k = k))
+
+  #  Réalisation des tests sur les résidus
+
+  # Tests de normalité
+  test_jb <- jarque.bera.test(donnees$residus)
+  test_ad <- ad.test(donnees$residus)
+  test_lillie <- lillie.test(donnees$residus)
+
+  # Tests de spécification et d'hétéroscédasticité
+  test_reset <- resettest(modele_lm, power = 2:3, type = "fitted")
+  test_bp <- bptest(modele_lm)
+
+  # Test d'autocorrélation spatiale
+  test_moran <- moran.test(
+    donnees$residus,
+    nb2listw(voisins, style = "W"))
+
+  # Calcul du VIF
+  vif <- car::vif(modele_lm)
+
+  # Regroupement des résultats dans un tableau
   tribble(
-    ~indicateur,                    ~stat,                          ~p,
-    "Observations",                 length(d$res),                  NA,
-    "Asymétrie",                    moments::skewness(d$res),       NA,
-    "Aplatissement (normale = 3)",  moments::kurtosis(d$res),       NA,
-    "Résidu minimal",               min(d$res),                     NA,
-    "Jarque-Bera",                  unname(jb$statistic),           jb$p.value,
-    "Anderson-Darling",             unname(ad$statistic),           ad$p.value,
-    "Lilliefors (D)",               unname(li$statistic),           li$p.value,
-    "RESET",                        unname(rs$statistic),           rs$p.value,
-    "Breusch-Pagan",                unname(bp$statistic),           bp$p.value,
-    "I de Moran",                   unname(mo$estimate[1]),         mo$p.value,
-    "VIF de la variable d'intérêt", unname(vf[var, 3]^2),           NA)   # GVIF ajusté² : VIF pour 1 ddl
-}
+    ~indicateur,                    ~statistique,                    ~p_value,
+    "Nombre d'observations",        length(donnees$residus),         NA,
+    "Asymétrie",                    moments::skewness(donnees$residus), NA,
+    "Aplatissement (normale = 3)",  moments::kurtosis(donnees$residus), NA,
+    "Résidu minimal",               min(donnees$residus),             NA,
+    "Jarque-Bera",                  unname(test_jb$statistic),  test_jb$p.value,
+    "Anderson-Darling",             unname(test_ad$statistic),  test_ad$p.value,
+    "Lilliefors",             unname(test_lillie$statistic),test_lillie$p.value,
+    "RESET",                  unname(test_reset$statistic),test_reset$p.value,
+    "Breusch-Pagan",          unname(test_bp$statistic),test_bp$p.value,
+    "I de Moran",                   unname(test_moran$estimate[1]),  test_moran$p.value,"VIF de la variable d'intérêt", unname(vif[var, 3]^2),NA)}
 
-diag <- imap_dfr(m, \(x, nom) bind_rows(
-  diag_modele(x$avant, dvf_zone,   specs[[nom]]) |> mutate(modele = nom, etape = "avant"),
-  diag_modele(x$apres, dvf_zone_2, specs[[nom]]) |> mutate(modele = nom, etape = "apres")))
+
+# Application des diagnostics aux trois modèles
+# Comparaison des résultats avant et après le filtre de Tukey
+
+diagnostics <- imap_dfr(m, \(modeles, nom) {
+
+  # Diagnostics avant filtrage
+  avant <- diagnostic_residus(
+    modeles$avant,
+    dvf_zone,
+    specs[[nom]]) |> mutate(modele = nom, etape = "Avant filtre")
+
+  # Diagnostics après filtrage
+  apres <- diagnostic_residus(
+    modeles$apres,
+    dvf_zone_2,
+    specs[[nom]]) |>
+    mutate(modele = nom, etape = "Après filtre") 
+  bind_rows(avant, apres)})
+
+
+# Affichage des résultats des diagnostics
+print(diagnostics)
 ```
+
+Les diagnostics montrent que le filtre de Tukey améliore nettement la distribution des résidus, en réduisant leur asymétrie et leur aplatissement. Toutefois, les tests de normalité restent significatifs et le filtre ne corrige ni l'hétéroscédasticité ni l'autocorrélation spatiale. Ces résultats confirment donc l'intérêt de conserver les modèles filtrés pour la suite de l'analyse, tout en tenant compte de ces limites.
 
 ```{r}
 #| results: asis
@@ -2099,57 +2287,48 @@ tableau_diag <- function(nom) {
 tableau_diag("distance")
 ```
 
-## 5.3 vérification de la neutralité du filtre
-```{r}
-retire <- dvf_zone |> st_drop_geometry() |>
-  left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
-  mutate(retiree = prix_m2 < bas | prix_m2 > haut,
-         bande = cut(dist_inond_km, c(-1, 0, .25, .5, 1, Inf),
-                     labels = c("dans la zone", "0-250 m", "250-500 m", "500 m-1 km", "> 1 km")))
 
-# Modèle 1 : dans / hors zone
-retire |> group_by(type_local, dans_zone_inond) |>
-  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2), .groups = "drop")
-# Modèle 2 : par catégorie d'exposition
-retire |> group_by(niveau) |>
-  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
-# Modèle 3 : par distance à la zone
-retire |> group_by(bande) |>
-  summarise(n = n(), part_retiree = round(100 * mean(retiree), 2))
-
-# Effectifs par catégorie sur la base filtrée (modèle 2)
-dvf_zone_2 |> st_drop_geometry() |> count(niveau)
-```
+## 5.5 Tests de robustesse des spécifications spatiales
 
 ```{r}
-dm     <- filter(dvf_zone_2, !is.na(log_revenu_median))
+dm <- filter(dvf_zone_2, !is.na(log_revenu_median))
 fe_ech <- c(z35 = "fe_spatial", c500 = "carreau500")
-m_ech  <- map(specs, \(v) map(fe_ech, \(f) estimer(dm, v, f)))
+m_ech <- map(specs, \(v) map(fe_ech, \(f) estimer(dm, v, f)))
 
 iwalk(m_ech, \(x, nom) print(etable(x$z35, x$c500, keep = specs[[nom]],
-                                    headers = c("35 zones", "Carreaux 500 m"), title = nom)))
+headers = c("35 zones", "Carreaux 500 m"), title = nom)))
 
-wald(m$niveau$apres, keep = "niveau")     # test conjoint des trois catégories (modèle 2)
+wald(m$niveau$apres, keep = "niveau") # test conjoint des trois catégories (modèle 2)
 ```
-## 5.4 vérification vif et comparaison résultats
+
+Pour le modèle 1, l'effet de la présence dans une zone inondable reste non significatif, quel que soit le découpage géographique retenu.
+
+Pour le modèle 2, le test de Wald (p-value = 0,1335) montre que les trois niveaux de risque (faible, moyen et fort) ne sont pas significatifs pris ensemble au seuil de 5 %.
+
+## 5.6 Vérification vif et comparaison résultats
 
 ```{r}
-x     <- c("dans_zone_inond", "dist_inond_km", "niveau")
-y      <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km +
+x <- c("dans_zone_inond", "dist_inond_km", "niveau")
+y <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km +
               log_revenu_median + factor(annee_mois) + factor(fe_spatial)"
 for (var in x) {
   f    <- as.formula(paste("log_prix_m2 ~", x, "+", y))
   reg <- lm(f, data = d_mod)
   print(vif(reg))}
 ```
-reteste des résultats sans dist centre
+
+Les VIF indiquent une multicolinéarité globalement faible entre les variables, à l’exception de la distance au centre-ville qui présente une valeur plus élevée.
+
+
+Les modèles sont estimés sans la variable de contrôle dist_centre_km, tout en conservant les autres variables de contrôle.
+
+### 5.6.1 Réestimmation sans la multicolinéarité 
 
 ```{r}
 if (!"carreau" %in% names(dvf_zone)) {
   g <- st_make_grid(zone_etude, cellsize = 1000)
   dvf_zone$carreau <- vapply(st_intersects(dvf_zone, g),
-                             function(i) if (length(i)) i[1] else NA_integer_, integer(1))
-}
+                function(i) if (length(i)) i[1] else NA_integer_, integer(1))}
 
 controles <- "log_surface + type_local + dist_cours_eau_km + log_revenu_median"
 
@@ -2158,19 +2337,21 @@ specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
            distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
 
 estimer <- function(data, var, fe = "fe_spatial")
-  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
-        data = data, cluster = ~carreau)
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),data = data, cluster = ~carreau)
 
 bases <- list(avant = dvf_zone, apres = dvf_zone_2)
 m <- map(specs, \(v) map(bases, \(d) estimer(d, v)))     # m$binaire$avant, m$niveau$apres, etc.
 
 iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
-                                headers = c("Avant filtre", "Après filtre"), title = nom)))
+      headers = c("Avant filtre", "Après filtre"), title = nom)))
 ```
 
+Les résultats restent globalement similaires avec ou sans la variable de contrôle dist_centre_km. Outre la significativité de certaines variables, les coefficients ne varient que très peu. Comme cette variable est significative dans deux de nos modèles, on décide de la garder.
 
 
-## 5.5 comparaison modèle plus fin
+FIN DU CODE 
+
+## 5.7 comparaison modèle plus fin
 ```{r}
 reg_c500 <- feols(
 log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
@@ -2187,25 +2368,3 @@ Il reste un I de 0,19, très significatif. Même en comparant des biens situés 
 meilleur i de moran (0.30 sinon)
 
 
-
-# 6) Analyse suggestion prof
-
-variable post a été supprimée en raison d'une collinéarité. code momdifié
-
-```{r}
-# 1. Création d'une variable binaire temporelle simple (Avant 2024 vs 2024-2025)
-dvf_zone <- dvf_zone |>
-  mutate(periode_post = if_else(annee_vente >= 2024, "Post-2024", "Pre-2024"))
-
-# 2. Modèle d'interaction propre (sans effet fixe année redondant avec 'post', 
-# mais en conservant les effets fixes spatiaux)
-reg_interaction_propres <- feols(
-  log_prix_m2 ~ dans_zone_inond * I(annee_vente >= 2024) + log_surface + type_local + 
-    dist_cours_eau_km + dist_centre_km + log_revenu_median | 
-    fe_spatial,
-  data = dvf_zone
-)
-
-# Affichage du résultat de l'interaction
-etable(reg_interaction_propres)
-```
