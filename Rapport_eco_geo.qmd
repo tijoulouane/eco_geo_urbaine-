@@ -437,7 +437,7 @@ Les mutations restantes sont écartées car leur structure ne permet pas d'ident
 
 Les lots comprenant des jardins ou d'autres éléments ne sont pas pris en compte. Il en va de même lorsque la nature du lot est floue ou non renseignée (NA).
 
-#### 2.1.1.10 Reconstruction de la base nettoyé 
+#### 2.1.1.10 Reconstruction de la base nettoyé
 
 On rassemble les différentes catégories de mutations conservées : - mutations simples ; - maisons regroupées ; - appartements avec annexes ; - mutations de plusieurs appartements dont la valeur a été répartie.
 
@@ -449,7 +449,7 @@ dvf_clean <- bind_rows(
   apparts_sols)
 ```
 
-#### 2.1.1.11 Créations des indicateurs immobiliers 
+#### 2.1.1.11 Créations des indicateurs immobiliers
 
 ```{r}
 
@@ -923,7 +923,7 @@ summary(revenus_iris$revenu_median_iris)
 revenus_iris |> count(code_iris) |> filter(n > 1)
 ```
 
-moyenne et médiane proche du revenu et pas de doublons 
+moyenne et médiane proche du revenu et pas de doublons
 
 ### 2.5.3 Importation des contours IRIS (IGN)
 
@@ -1212,12 +1212,22 @@ ggplot() +
 ### Représentation des trois scénarios
 
 ```{r}
+zones_tri <- inond_nantes %>%
+  mutate(
+    scenario = dplyr::recode(
+      scenario,
+      "04Fai" = "Faible",
+      "02Moy" = "Moyen",
+      "01For" = "Fort"
+    )
+  )
+
 ggplot() +
   # Fond des communes
   geom_sf(data = communes_tri, fill = "grey96", color = NA) +
 
   # Zones d'inondation
-  geom_sf(data = zones_tri, aes(fill = scenario), color = NA, alpha = 0.8) +
+  geom_sf(data = zones_tri , aes(fill = scenario), color = NA, alpha = 0.8) +
 
   # Contours des communes
   geom_sf(data = communes_tri, fill = NA, color = "grey75", linewidth = 0.3) +
@@ -1749,6 +1759,7 @@ ggplot() +
 ```
 
 # 4) Préparation finale des variables pour la regression
+
 ## 4.1 Calcul des distances géographiques (en km)
 
 ```{r}
@@ -1780,8 +1791,7 @@ dvf_zone$dist_centre_km <- as.numeric(
   st_distance(dvf_zone, centre_nantes)) / 1000
 ```
 
-
-## 4.2 Effets fixes et création de varibales 
+## 4.2 Effets fixes et création de varibales
 
 ```{r}
 # Effets fixes géographique quartier pour nantes et communes. 
@@ -1815,7 +1825,8 @@ dvf_zone <- dvf_zone |>
 ```
 
 # 5) Estimations économétriques
-## 5.1 Normalité des résidus 
+
+## 5.1 Normalité des résidus
 
 ```{r}
 # Modèle Binaire avec variable de contrôle, effet fixe et clusterisation
@@ -1842,21 +1853,21 @@ qqline(d_mod$res, col = "red")
 hist(d_mod$res, breaks = 80, freq = FALSE, main = "Distribution des résidus", xlab = "Résidu")
 curve(dnorm(x, mean(d_mod$res), sd(d_mod$res)), add = TRUE, col = "red", lwd = 2)
 ```
+
 Les résidus présentent une asymétrie à gauche et des écarts importants à la droite théorique notamment dans les queues de distribution.
 
 ```{r}
 ad.test(d_mod$res) 
 ```
-Test d'Anderson-Darling : la p-value est inférieure à 2,2e-16.
-L'hypothèse de normalité des résidus est donc rejetée au seuil de 5 %.
-p value inférieure, asymétrie confirmée
 
-Nous décidons alors d'appliquer un filtrage de Tukey sur les prix au m².
-L'objectif est d'améliorer la distribution des résidus, puis de réestimer le modèle et de comparer les résultats avant et après filtrage pour vérifier leur robustesse.
+Test d'Anderson-Darling : la p-value est inférieure à 2,2e-16. L'hypothèse de normalité des résidus est donc rejetée au seuil de 5 %. p value inférieure, asymétrie confirmée
+
+Nous décidons alors d'appliquer un filtrage de Tukey sur les prix au m². L'objectif est d'améliorer la distribution des résidus, puis de réestimer le modèle et de comparer les résultats avant et après filtrage pour vérifier leur robustesse.
 
 ## 5.2 Filtre de Tukey
 
 Après cette étape de filtrage, nous reprenons l’ensemble des opérations précédemment réalisées pour constituer notre base d’analyse : délimitation de la zone d’étude, identification des transactions situées en zone inondable, calcul des distances aux cours d’eau et au centre-ville, intégration du revenu médian par IRIS, puis création des variables explicatives et des effets fixes spatiaux et temporels. Enfin, nous reconstruisons les maillages spatiaux utilisés pour le regroupement des erreurs standards, afin de pouvoir réestimer le modèle économétrique sur cet échantillon filtré et comparer les résultats avec ceux obtenus initialement.
+
 ```{r}
 # Paramètres 
 champ_quartier <- "Nom_du_quar"
@@ -2016,12 +2027,13 @@ reg_filtre <- feols(
     dist_cours_eau_km + dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
   data = dvf_zone_2)
 ```
-Après application du filtre de Tukey, 2 805 transactions ont été supprimées sur les 61 138 observations initiales, soit environ 4,6 %. Le nouvel échantillon comprend ainsi 32 560 transactions situées dans le périmètre du TRI de Nantes, dont 2 250 en zone inondable (6,9 %). Il reste composé majoritairement d'appartements (22 587 ventes) et compte 35 zones géographiques, dont 18 comportent à la fois des biens exposés et non exposés au risque d'inondation.
 
+Après application du filtre de Tukey, 2 805 transactions ont été supprimées sur les 61 138 observations initiales, soit environ 4,6 %. Le nouvel échantillon comprend ainsi 32 560 transactions situées dans le périmètre du TRI de Nantes, dont 2 250 en zone inondable (6,9 %). Il reste composé majoritairement d'appartements (22 587 ventes) et compte 35 zones géographiques, dont 18 comportent à la fois des biens exposés et non exposés au risque d'inondation.
 
 ### 5.2.1 Vérification de la neutralité du filtre
 
 Vérification si le filtre de Tukey supprime les transactions de manière équilibrée selon leur exposition au risque d'inondation.
+
 ```{r}
 retire <- dvf_zone |> st_drop_geometry() |>
   left_join(bornes_prix |> select(type_local, bas, haut), by = "type_local") |>
@@ -2042,6 +2054,7 @@ retire |> group_by(bande) |>
 # Effectifs par catégorie sur la base filtrée (modèle 2)
 dvf_zone_2 |> st_drop_geometry() |> count(niveau)
 ```
+
 Le filtre de Tukey supprime une proportion limitée et globalement comparable de transactions entre les biens exposés et non exposés au risque d’inondation, ne révélant pas de biais de sélection manifeste selon leur niveau d’exposition
 
 ### 5.2.2 Comparaison de la distribution des prix au m² avant et après le filtre de Tukey
@@ -2055,7 +2068,8 @@ comparaison_prix <- data.frame(
 
 print(comparaison_prix)
 ```
-6      Maximum  17682.92683     8620.690
+
+6 Maximum 17682.92683 8620.690
 
 Le filtre de Tukey réduit fortement l’influence des valeurs extrêmes : le prix minimum passe de 61 € à 1 169 €/m² et le maximum de 17 683 € à 8 621 €/m². En revanche, la médiane et la moyenne évoluent très peu, ce qui montre que le filtre élimine principalement les valeurs atypiques sans modifier significativement le niveau général des prix.
 
@@ -2143,6 +2157,7 @@ etable(
 )
 
 ```
+
 Les résultats obtenus après le filtre de Tukey sont très proches de ceux observés avant filtrage, ce qui confirme la stabilité globale des estimations, comme souligné dans le rapport. Le coefficient associé à l’exposition binaire reste positif et non significatif (0,0342 après filtrage) : nous ne mettons donc pas en évidence de décote immobilière liée au fait de se situer en zone inondable. De même, les coefficients des différents niveaux de risque évoluent très peu : seul le niveau de risque fort présente un coefficient positif significatif au seuil de 10 %, un résultat contraire à l’effet négatif initialement attendu. Enfin, le coefficient de la distance à la zone inondable reste négatif et significatif au seuil de 10 %, indiquant que les prix au m² tendent à diminuer lorsque l'on s'éloigne de ces zones.
 
 Ainsi, conformément à ce qui est indiqué dans le rapport, le filtrage modifie peu les résultats : les coefficients conservent globalement les mêmes signes et les mêmes ordres de grandeur. Il permet surtout de travailler sur un échantillon dont la distribution des prix est moins affectée par les valeurs extrêmes.
@@ -2206,6 +2221,28 @@ diagnostic_residus <- function(reg, data_sf, var, k = 8) {
 # Application des diagnostics aux trois modèles
 # Comparaison des résultats avant et après le filtre de Tukey
 
+# Regroupement des modèles avant et après le filtre de Tukey
+m <- list(
+  binaire = list(
+    avant = modele1_avant,
+    apres = modele1_apres
+  ),
+  niveau = list(
+    avant = modele2_avant,
+    apres = modele2_apres
+  ),
+  distance = list(
+    avant = modele3_avant,
+    apres = modele3_apres
+  )
+)
+
+specs <- list(
+  binaire = "dans_zone_inond",
+  niveau = "niveau",
+  distance = "dist_inond_km"
+)
+
 diagnostics <- imap_dfr(m, \(modeles, nom) {
 
   # Diagnostics avant filtrage
@@ -2242,55 +2279,77 @@ fmt_s <- \(x, ind) ifelse(ind == "Observations",
 ecart <- \(x, ind) abs(x - ifelse(ind == "Aplatissement (normale = 3)", 3, 0))
 sans_variation <- c("Observations", "VIF de la variable d'intérêt")
 
-tab <- diag |>
-  pivot_wider(names_from = etape, values_from = c(stat, p)) |>
-  mutate(variation = 100 * (ecart(stat_apres, indicateur) - ecart(stat_avant, indicateur)) /
-                     ecart(stat_avant, indicateur),
-         variation = ifelse(indicateur %in% sans_variation, NA, variation),
-         evolution = case_when(is.na(variation) ~ "—",
-                               variation < 0    ~ "amélioration",
-                               TRUE             ~ "dégradation"),
-         across(c(stat_avant, stat_apres), \(x) fmt_s(x, indicateur)),
-         across(c(p_avant, p_apres), fmt_p),
-         variation = ifelse(is.na(variation), "—", formatC(variation, format = "f", digits = 1, decimal.mark = ",")))
+tab <- diagnostics |>
+  mutate(etape = dplyr::recode(etape,
+      "Avant filtre" = "avant","Après filtre" = "apres")) |>
+  pivot_wider( names_from = etape,values_from = c(statistique, p_value)) |>
+  mutate(
+    variation = 100 * (
+      ecart(statistique_apres, indicateur) -ecart(statistique_avant, indicateur)
+    ) / ecart(statistique_avant, indicateur),
+
+    variation = ifelse(indicateur %in% sans_variation,NA,variation),
+
+    evolution = case_when(is.na(variation) ~ "—",variation < 0 ~ "amélioration",
+    TRUE ~ "dégradation"),
+
+    across( c(statistique_avant, statistique_apres), \(x) fmt_s(x, indicateur)),
+
+    across(c(p_value_avant, p_value_apres),fmt_p),
+
+    variation = ifelse(is.na(variation),"—",
+      formatC(variation, format = "f", digits = 1, decimal.mark = ",")
+    ))
 
 options(width = 200)
 
 tableau_diag <- function(nom) {
   tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
+    select(indicateur, statistique_avant,p_value_avant,statistique_apres,
+      p_value_apres,variation,evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique","p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))}
 
 tableau_diag("binaire")
 
 tableau_diag <- function(nom) {
   tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
+    select(indicateur, statistique_avant,p_value_avant,statistique_apres,
+      p_value_apres,variation,evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique","p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))}
 
 tableau_diag("niveau")
 
 tableau_diag <- function(nom) {
   tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
+    select(indicateur, statistique_avant,p_value_avant,statistique_apres,
+      p_value_apres,variation,evolution) |>
+    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique","p-value", "Variation de l'écart (%)", "Évolution"),
+                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))}
 
 tableau_diag("distance")
 ```
 
-
 ## 5.5 Tests de robustesse des spécifications spatiales
 
 ```{r}
+
+# Fonction d'estimation des modèles avec différents effets fixes
+estimer <- function(data, var, fe) {
+
+  formule <- as.formula(
+    paste0(
+      "log_prix_m2 ~ ", var,
+      " + log_surface + type_local",
+      " + dist_cours_eau_km + dist_centre_km + log_revenu_median",
+      " | annee_mois + ", fe))
+
+  fixest::feols(
+    formule,
+    data = data,
+    cluster = ~carreau)}
+
 dm <- filter(dvf_zone_2, !is.na(log_revenu_median))
 fe_ech <- c(z35 = "fe_spatial", c500 = "carreau500")
 m_ech <- map(specs, \(v) map(fe_ech, \(f) estimer(dm, v, f)))
@@ -2319,10 +2378,9 @@ for (var in x) {
 
 Les VIF indiquent une multicolinéarité globalement faible entre les variables, à l’exception de la distance au centre-ville qui présente une valeur plus élevée.
 
-
 Les modèles sont estimés sans la variable de contrôle dist_centre_km, tout en conservant les autres variables de contrôle.
 
-### 5.6.1 Réestimmation sans la multicolinéarité 
+### 5.6.1 Réestimmation sans la multicolinéarité
 
 ```{r}
 if (!"carreau" %in% names(dvf_zone)) {
@@ -2348,10 +2406,10 @@ iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
 
 Les résultats restent globalement similaires avec ou sans la variable de contrôle dist_centre_km. Outre la significativité de certaines variables, les coefficients ne varient que très peu. Comme cette variable est significative dans deux de nos modèles, on décide de la garder.
 
-
-FIN DU CODE 
+FIN DU CODE
 
 ## 5.7 comparaison modèle plus fin
+
 ```{r}
 reg_c500 <- feols(
 log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
@@ -2362,9 +2420,7 @@ pts500 <- dvf_zone_2 |> slice(obs(reg_c500))
 nb500  <- knn2nb(knearneigh(st_coordinates(pts500), k = 8))
 moran.test(res500, nb2listw(nb500, style = "W"))
 ```
-attention pas le même nombre de données
-Il reste un I de 0,19, très significatif. Même en comparant des biens situés dans le même carreau de 500 m, les résidus restent corrélés dans l’espace. Cela peut venir de caractéristiques locales non observées qui varient plus finement que le carreau (immeuble, rue, vue), ou de la structure des voisins : des ventes situées dans un même immeuble ont presque les mêmes coordonnées.
+
+attention pas le même nombre de données Il reste un I de 0,19, très significatif. Même en comparant des biens situés dans le même carreau de 500 m, les résidus restent corrélés dans l’espace. Cela peut venir de caractéristiques locales non observées qui varient plus finement que le carreau (immeuble, rue, vue), ou de la structure des voisins : des ventes situées dans un même immeuble ont presque les mêmes coordonnées.
 
 meilleur i de moran (0.30 sinon)
-
-
