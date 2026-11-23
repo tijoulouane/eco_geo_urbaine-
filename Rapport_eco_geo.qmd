@@ -1821,6 +1821,22 @@ dvf_zone <- dvf_zone |>
 ```
 
 # 5) Estimations économétriques
+
+## Justification du cluster
+```{r}
+reg <- feols(log_prix_m2 ~ niveau + log_surface + type_local + dist_eau_km +
+               dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
+             data = dvf_zone_2)
+
+etable(reg, reg, reg,
+       vcov = list(~carreau, ~carreau500, ~fe_spatial),
+       headers = c("Carreau 1 km", "Carreau 500 m", "fe_spatial (35)"))
+
+c(grappes_1km = n_distinct(dvf_zone_2$carreau),
+  grappes_500m = n_distinct(dvf_zone_2$carreau500),
+  grappes_fe = n_distinct(dvf_zone_2$fe_spatial))
+```
+## prémices
 ```{r}
 # modèle
 reg_binaire <- feols(
@@ -1834,7 +1850,7 @@ d_mod <- dvf_zone |> st_drop_geometry() |> slice(obs(reg_binaire))
 d_mod$res <- resid(reg_binaire)
 d_mod$fit <- fitted(reg_binaire)
 
-m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_cours_eau_km +
+m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_eau_km +
              dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial),
            data = d_mod)
 
@@ -1845,9 +1861,11 @@ hist(d_mod$res, breaks = 80, freq = FALSE, main = "Distribution des résidus", x
 curve(dnorm(x, mean(d_mod$res), sd(d_mod$res)), add = TRUE, col = "red", lwd = 2)
 ```
 ```{r}
-ad.test(d_mod$res) 
+ad.test(d_mod$res)
 ```
 p value inférieure, asymétrie confirmée
+
+## application du filtre de tukey
 ```{r}
 # ---- 0. Paramètres ----
 champ_quartier <- "Nom_du_quar"
@@ -1982,6 +2000,8 @@ reg_filtre <- feols(
 
 
 ## 5.1 estimation, 3 modèles, avant et après filtre
+la base des trois modèles est le fait d'être dans la zone inondable/la distance à la zone / le risque associé
+on notera aussi que le choix entre les 3 approches pour l'eau se fait par rapport au vif, dans la partie 5.4
 ```{r}
 if (!"carreau" %in% names(dvf_zone)) {
   g <- st_make_grid(zone_etude, cellsize = 1000)
@@ -1989,13 +2009,13 @@ if (!"carreau" %in% names(dvf_zone)) {
                              function(i) if (length(i)) i[1] else NA_integer_, integer(1))
 }
 
-controles <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km + log_revenu_median"
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
 
 specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
            niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
            distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
 
-estimer <- function(data, var, fe = "fe_spatial")
+estimer <- function(data, var, fe = "fe_spatial")   # modifier carreau
   feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
         data = data, cluster = ~carreau)
 
@@ -2099,6 +2119,31 @@ tableau_diag <- function(nom) {
 tableau_diag("distance")
 ```
 
+### 5.2.1 distribution des résidus après filtrage
+```{r}
+# modèle
+reg_binaire_2 <- feols(
+  log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
+    dist_eau_km + dist_centre_km + log_revenu_median |
+    annee_mois + fe_spatial,
+  data = dvf_zone_2, cluster = ~carreau)
+
+# base
+d_mod2 <- dvf_zone_2 |> st_drop_geometry() |> slice(obs(reg_binaire_2))
+d_mod2$res <- resid(reg_binaire_2)
+d_mod2$fit <- fitted(reg_binaire_2)
+
+m_lm <- lm(log_prix_m2 ~ dans_zone_inond + log_surface + type_local + dist_eau_km +
+             dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial),
+           data = d_mod2)
+
+# Normalité des résidus
+qqnorm(d_mod2$res, main = "QQ-plot des résidus après filtrage"); qqline(d_mod$res, col = "red")
+
+hist(d_mod2$res, breaks = 80, freq = FALSE, main = "Distribution des résidus après filtrage", xlab = "Résidu")
+curve(dnorm(x, mean(d_mod2$res), sd(d_mod2$res)), add = TRUE, col = "red", lwd = 2)
+```
+
 ## 5.3 vérification de la neutralité du filtre
 ```{r}
 retire <- dvf_zone |> st_drop_geometry() |>
@@ -2121,22 +2166,11 @@ retire |> group_by(bande) |>
 dvf_zone_2 |> st_drop_geometry() |> count(niveau)
 ```
 
-```{r}
-dm     <- filter(dvf_zone_2, !is.na(log_revenu_median))
-fe_ech <- c(z35 = "fe_spatial", c500 = "carreau500")
-m_ech  <- map(specs, \(v) map(fe_ech, \(f) estimer(dm, v, f)))
-
-iwalk(m_ech, \(x, nom) print(etable(x$z35, x$c500, keep = specs[[nom]],
-                                    headers = c("35 zones", "Carreaux 500 m"), title = nom)))
-
-wald(m$niveau$apres, keep = "niveau")     # test conjoint des trois catégories (modèle 2)
-```
 ## 5.4 vérification vif et comparaison résultats
 
 ```{r}
 x     <- c("dans_zone_inond", "dist_inond_km", "niveau")
-y      <- "log_surface + type_local + dist_cours_eau_km + dist_centre_km +
-              log_revenu_median + factor(annee_mois) + factor(fe_spatial)"
+y      <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median + factor(annee_mois) + factor(fe_spatial)"
 for (var in x) {
   f    <- as.formula(paste("log_prix_m2 ~", x, "+", y))
   reg <- lm(f, data = d_mod)
@@ -2151,7 +2185,7 @@ if (!"carreau" %in% names(dvf_zone)) {
                              function(i) if (length(i)) i[1] else NA_integer_, integer(1))
 }
 
-controles <- "log_surface + type_local + dist_cours_eau_km + log_revenu_median"
+controles <- "log_surface + type_local + dist_eau_km + log_revenu_median"
 
 specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
            niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
@@ -2172,20 +2206,124 @@ iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
 
 ## 5.5 comparaison modèle plus fin
 ```{r}
-reg_c500 <- feols(
-log_prix_m2 ~ dans_zone_inond + log_surface + type_local +
-    dist_cours_eau_km + dist_centre_km + log_revenu_median | annee_mois + carreau500, data = dvf_zone_2, cluster = ~carreau)
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
+specs     <- c(binaire = "dans_zone_inond", niveau = "niveau", distance = "dist_inond_km")
 
-res500 <- resid(reg_c500)
-pts500 <- dvf_zone_2 |> slice(obs(reg_c500))
-nb500  <- knn2nb(knearneigh(st_coordinates(pts500), k = 8))
-moran.test(res500, nb2listw(nb500, style = "W"))
+estimer <- function(data, var)
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + fe_spatial")),
+        data = data, cluster = ~carreau500)
+
+m_bande <- map(specs, \(v) estimer(dvf_zone_2, v))
+
+etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
+       headers = c("Binaire", "Catégories", "Distance"))
 ```
 attention pas le même nombre de données
-Il reste un I de 0,19, très significatif. Même en comparant des biens situés dans le même carreau de 500 m, les résidus restent corrélés dans l’espace. Cela peut venir de caractéristiques locales non observées qui varient plus finement que le carreau (immeuble, rue, vue), ou de la structure des voisins : des ventes situées dans un même immeuble ont presque les mêmes coordonnées.
 
-meilleur i de moran (0.30 sinon)
+## 5.6 comparaison sans le revenu pour vérifier l'endogénéité
+```{r}
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km"
+specs     <- c(binaire = "dans_zone_inond", niveau = "niveau", distance = "dist_inond_km")
 
+estimer <- function(data, var)
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + fe_spatial")),
+        data = data, cluster = ~carreau)
+
+m_bande <- map(specs, \(v) estimer(dvf_zone_2, v))
+
+etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
+       headers = c("Binaire", "Catégories", "Distance"))
+```
+mieux avec revenu, échantillon différent donc possible que l'écart soit issu des nouveaux individus
+```{r}
+dm <- dvf_zone_2 |> filter(!is.na(log_revenu_median))
+f  <- \(ctrl) feols(as.formula(paste0("log_prix_m2 ~ dans_zone_inond + ", ctrl, " | annee_mois + fe_spatial")),
+                    data = dm, cluster = ~carreau)
+etable(f("log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"),
+       f("log_surface + type_local + dist_eau_km + dist_centre_km"),
+       headers = c("Avec revenu", "Sans revenu (même échantillon)"))
+```
+
+
+## 5.7 modèle d'analyse temporelle 
+```{r}
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
+
+reg_saison <- feols(
+  as.formula(paste0("log_prix_m2 ~ i(mois_vente, ref = '1') + dans_zone_inond + ", controles,
+                    " | annee_vente + fe_spatial")),
+  data = dvf_zone_2, cluster = ~carreau)
+
+etable(reg_saison, keep = "mois_vente")
+```
+```{r}
+# Par saison
+reg_expo_saison <- feols(
+  as.formula(paste0("log_prix_m2 ~ i(saison, expo) + ", controles,
+                    " | annee_vente + saison + fe_spatial")),
+  data = dvf_zone_2, cluster = ~carreau)
+
+etable(reg_expo_saison)
+
+# Les écarts sont-ils égaux d'une saison à l'autre ?
+wald(reg_expo_saison, keep = "saison")        
+```
+
+## 5.8 modèle avec uniquement les logements en zone inondées / proche d'un cours d'eau
+### 5.8.1 biens proches de l'eau
+```{r}
+dvf_eau <- dvf_zone_2 |> filter(dist_eau_km <= 0.1)
+
+dvf_eau |> st_drop_geometry() |>
+  group_by(fe_spatial) |>
+  summarise(expo = any(dans_zone_inond), non_expo = any(!dans_zone_inond), .groups = "drop") |>
+  summarise(zones = n(), zones_mixtes = sum(expo & non_expo))
+
+# régression
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
+specs     <- c(binaire = "dans_zone_inond", niveau = "niveau", distance = "dist_inond_km")
+
+estimer <- function(data, var)
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + fe_spatial")),
+        data = data, cluster = ~carreau)
+
+m_eau <- map(specs, \(v) estimer(dvf_eau, v))
+
+etable(m_eau$binaire, m_eau$niveau, m_eau$distance,
+       headers = c("Binaire", "Catégories", "Distance"))
+```
+
+aucun changement majeur
+
+### 5.8.2 biens en zone et proches de la zone
+```{r}
+dvf_bande <- dvf_zone_2 |> filter(dist_inond_km <= 0.5)
+
+controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
+specs     <- c(binaire = "dans_zone_inond", niveau = "niveau", distance = "dist_inond_km")
+
+estimer <- function(data, var)
+  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + fe_spatial")),
+        data = data, cluster = ~carreau)
+
+m_bande <- map(specs, \(v) estimer(dvf_bande, v))
+
+etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
+       headers = c("Binaire", "Catégories", "Distance"))
+```
+seul changement majeur: dist inond qui devient positif (toujours non signifcatif), mias uniquement pour des seuils de 300 à 500m, après plus on s'écarte, plus on tend vers -0.025 (significatif)
+
+### 5.8.3 seulement biens exposés
+```{r}
+dvf_expo <- dvf_zone_2 |> filter(dans_zone_inond) |> mutate(niveau = droplevels(niveau))
+
+reg_expo <- feols(
+  log_prix_m2 ~ niveau + log_surface + type_local + dist_eau_km +
+    dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
+  data = dvf_expo, cluster = ~carreau)
+etable(reg_expo)
+```
+Aucune des deux catégories n’est plus basse que la référence. Si le risque se capitalisait en fonction de l’intensité, on attendrait des coefficients négatifs et croissants en valeur absolue, et ce n’est pas le cas.
 
 
 # 6) Analyse suggestion prof
