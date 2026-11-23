@@ -2488,7 +2488,7 @@ etable(f("log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_m
        f("log_surface + type_local + dist_eau_km + dist_centre_km"),
        headers = c("Avec revenu", "Sans revenu (même échantillon)"))
 ```
-
+La comparaison des modèles avec et sans revenu médian montre que son inclusion fait passer le coefficient d’exposition de +0,005 à +0,037, sans toutefois modifier sa non-significativité. Le revenu médian est donc conservé dans le modèle principal afin de contrôler les différences socio-économiques entre quartiers et de limiter le risque de biais lié à son omission.
 
 ## 5.8 Modèle d'analyse temporelle 
 ```{r}
@@ -2504,6 +2504,9 @@ reg_saison <- feols(
 
 etable(reg_saison, keep = "mois_vente")
 ```
+
+Le modèle met en évidence une saisonnalité des prix immobiliers, avec des prix significativement plus faibles en novembre et décembre (respectivement −3,1 % et −3,3 % par rapport au mois de référence). Les autres variations mensuelles sont plus limitées et majoritairement non significatives, ce qui suggère une baisse des prix en fin d'année.
+
 ```{r}
 dvf_zone_2 <- dvf_zone_2 |>
   mutate(saison = factor(case_when(month(date_mutation) %in% c(12, 1, 2) ~ "Hiver",month(date_mutation) %in% c(3, 4, 5)  ~ "Printemps",month(date_mutation) %in% c(6, 7, 8)  ~ "Été",TRUE ~ "Automne"), levels = c("Hiver", "Printemps", "Été", "Automne")), expo = as.numeric(dans_zone_inond))
@@ -2519,6 +2522,9 @@ etable(reg_expo_saison)
 # Les écarts sont-ils égaux d'une saison à l'autre ?
 wald(reg_expo_saison, keep = "saison")        
 ```
+
+Les coefficients d’exposition sont positifs dans les quatre saisons, avec des valeurs relativement proches (entre +0,032 et +0,044), mais seul celui de l’hiver est significatif au seuil de 10 %. Le test de Wald (p-value = 0,497) ne permet pas de rejeter l’égalité des effets saisonniers : aucune différence statistiquement significative entre les saisons n’est mise en évidence.
+
 
 ## 5.9 Modèle avec uniquement les logements en zone inondées / proche d'un cours d'eau
 ### 5.9.1 Biens proches de l'eau
@@ -2543,8 +2549,7 @@ m_eau <- map(specs, \(v) estimer(dvf_eau, v))
 etable(m_eau$binaire, m_eau$niveau, m_eau$distance,
        headers = c("Binaire", "Catégories", "Distance"))
 ```
-
-aucun changement majeur
+Restreindre l'analyse aux biens situés à moins de 100 mètres de l'eau ne modifie pas la conclusion générale : aucun effet significatif de l'exposition au risque d'inondation sur les prix immobiliers n'est mis en évidence.
 
 ### 5.9.2 Biens en zone et proches de la zone
 ```{r}
