@@ -2489,6 +2489,9 @@ etable(f("log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_m
 
 ## 5.8 Modèle d'analyse temporelle 
 ```{r}
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(mois_vente = lubridate::month(date_mutation))
+
 controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
 
 reg_saison <- feols(
@@ -2499,6 +2502,25 @@ reg_saison <- feols(
 etable(reg_saison, keep = "mois_vente")
 ```
 ```{r}
+dvf_zone_2 <- dvf_zone_2 |>
+  mutate(
+    mois_vente = lubridate::month(date_mutation),
+
+    saison = case_when(
+      mois_vente %in% c(12, 1, 2) ~ "Hiver",
+      mois_vente %in% c(3, 4, 5)  ~ "Printemps",
+      mois_vente %in% c(6, 7, 8)  ~ "Été",
+      mois_vente %in% c(9, 10, 11) ~ "Automne"
+    ),
+
+    saison = factor(saison,
+                    levels = c("Hiver", "Printemps", "Été", "Automne")),
+
+    expo = factor(dans_zone_inond,
+                  levels = c(FALSE, TRUE),
+                  labels = c("Non exposé", "Exposé"))
+  )
+
 # Par saison
 reg_expo_saison <- feols(
   as.formula(paste0("log_prix_m2 ~ i(saison, expo) + ", controles,
