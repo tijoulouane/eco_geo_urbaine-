@@ -1825,22 +1825,6 @@ dvf_zone <- dvf_zone |>
 ```
 
 # 5) Estimations économétriques
-
-## Justification du cluster
-```{r}
-reg <- feols(log_prix_m2 ~ niveau + log_surface + type_local + dist_eau_km +
-               dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
-             data = dvf_zone_2)
-
-etable(reg, reg, reg,
-       vcov = list(~carreau, ~carreau500, ~fe_spatial),
-       headers = c("Carreau 1 km", "Carreau 500 m", "fe_spatial (35)"))
-
-c(grappes_1km = n_distinct(dvf_zone_2$carreau),
-  grappes_500m = n_distinct(dvf_zone_2$carreau500),
-  grappes_fe = n_distinct(dvf_zone_2$fe_spatial))
-```
-
 ## 5.1 Normalité des résidus
 
 ```{r}
@@ -2043,126 +2027,8 @@ reg_filtre <- feols(
 
 Après application du filtre de Tukey, 2 805 transactions ont été supprimées sur les 61 138 observations initiales, soit environ 4,6 %. Le nouvel échantillon comprend ainsi 32 560 transactions situées dans le périmètre du TRI de Nantes, dont 2 250 en zone inondable (6,9 %). Il reste composé majoritairement d'appartements (22 587 ventes) et compte 35 zones géographiques, dont 18 comportent à la fois des biens exposés et non exposés au risque d'inondation.
 
-## 5.1 estimation, 3 modèles, avant et après filtre
-la base des trois modèles est le fait d'être dans la zone inondable/la distance à la zone / le risque associé
-```{r}
-if (!"carreau" %in% names(dvf_zone)) {
-  g <- st_make_grid(zone_etude, cellsize = 1000)
-  dvf_zone$carreau <- vapply(st_intersects(dvf_zone, g),
-                             function(i) if (length(i)) i[1] else NA_integer_, integer(1))
-}
 
-controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
-
-specs <- c(binaire  = "dans_zone_inond",   # modèle 1 : exposition (0/1)
-           niveau   = "niveau",            # modèle 2 : catégories (référence : hors zone)
-           distance = "dist_inond_km")     # modèle 3 : distance à la zone (km)
-
-estimer <- function(data, var, fe = "fe_spatial")   # modifier carreau
-  feols(as.formula(paste0("log_prix_m2 ~ ", var, " + ", controles, " | annee_mois + ", fe)),
-        data = data, cluster = ~carreau)
-
-bases <- list(avant = dvf_zone, apres = dvf_zone_2)
-m <- map(specs, \(v) map(bases, \(d) estimer(d, v)))     # m$binaire$avant, m$niveau$apres, etc.
-
-iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
-                                headers = c("Avant filtre", "Après filtre"), title = nom)))
-```
-
-## 5.2 diagnostic des résidus
-```{r}
-diag_modele <- function(reg, data_sf, var, k = 8) {
-  pts <- data_sf[obs(reg), ]                       # observations réellement utilisées
-  d   <- st_drop_geometry(pts); d$res <- resid(reg)
-
-  # Version lm (effets fixes en facteurs) : nécessaire pour RESET, Breusch-Pagan, VIF
-  m_lm <- lm(update(reg$fml, . ~ . + factor(annee_mois) + factor(fe_spatial)), data = d)
-
-  nb <- knn2nb(knearneigh(st_coordinates(pts), k = k))
-  jb <- jarque.bera.test(d$res);  ad <- ad.test(d$res);  li <- lillie.test(d$res)
-  rs <- resettest(m_lm, power = 2:3, type = "fitted");  bp <- bptest(m_lm)
-  mo <- moran.test(d$res, nb2listw(nb, style = "W"))
-  vf <- car::vif(m_lm)
-
-  tribble(
-    ~indicateur,                    ~stat,                          ~p,
-    "Observations",                 length(d$res),                  NA,
-    "Asymétrie",                    moments::skewness(d$res),       NA,
-    "Aplatissement (normale = 3)",  moments::kurtosis(d$res),       NA,
-    "Résidu minimal",               min(d$res),                     NA,
-    "Jarque-Bera",                  unname(jb$statistic),           jb$p.value,
-    "Anderson-Darling",             unname(ad$statistic),           ad$p.value,
-    "Lilliefors (D)",               unname(li$statistic),           li$p.value,
-    "RESET",                        unname(rs$statistic),           rs$p.value,
-    "Breusch-Pagan",                unname(bp$statistic),           bp$p.value,
-    "I de Moran",                   unname(mo$estimate[1]),         mo$p.value,
-    "VIF de la variable d'intérêt", unname(vf[var, 3]^2),           NA)   # GVIF ajusté² : VIF pour 1 ddl
-}
-
-diag <- imap_dfr(m, \(x, nom) bind_rows(
-  diag_modele(x$avant, dvf_zone,   specs[[nom]]) |> mutate(modele = nom, etape = "avant"),
-  diag_modele(x$apres, dvf_zone_2, specs[[nom]]) |> mutate(modele = nom, etape = "apres")))
-```
-
-```{r}
-#| results: asis
-fmt_p <- \(p) ifelse(is.na(p), "—",
-                     ifelse(p < 2.2e-16, "< 2,2e-16",
-                            formatC(p, format = "e", digits = 1, decimal.mark = ",")))
-fmt_s <- \(x, ind) ifelse(ind == "Observations",
-                          formatC(x, format = "d", big.mark = " "),
-                          formatC(x, format = "f", digits = 3, big.mark = " ", decimal.mark = ","))
-
-# Écart à la valeur de référence (3 pour l'aplatissement, 0 pour les autres indicateurs)
-ecart <- \(x, ind) abs(x - ifelse(ind == "Aplatissement (normale = 3)", 3, 0))
-sans_variation <- c("Observations", "VIF de la variable d'intérêt")
-
-tab <- diag |>
-  pivot_wider(names_from = etape, values_from = c(stat, p)) |>
-  mutate(variation = 100 * (ecart(stat_apres, indicateur) - ecart(stat_avant, indicateur)) /
-                     ecart(stat_avant, indicateur),
-         variation = ifelse(indicateur %in% sans_variation, NA, variation),
-         evolution = case_when(is.na(variation) ~ "—",
-                               variation < 0    ~ "amélioration",
-                               TRUE             ~ "dégradation"),
-         across(c(stat_avant, stat_apres), \(x) fmt_s(x, indicateur)),
-         across(c(p_avant, p_apres), fmt_p),
-         variation = ifelse(is.na(variation), "—", formatC(variation, format = "f", digits = 1, decimal.mark = ",")))
-
-options(width = 200)
-
-tableau_diag <- function(nom) {
-  tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
-
-tableau_diag("binaire")
-
-tableau_diag <- function(nom) {
-  tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
-
-tableau_diag("niveau")
-
-tableau_diag <- function(nom) {
-  tab |> filter(modele == nom) |>
-    select(indicateur, stat_avant, p_avant, stat_apres, p_apres, variation, evolution) |>
-    knitr::kable(col.names = c("Indicateur", "Avant : statistique", "p-value", "Après : statistique",
-                               "p-value", "Variation de l'écart (%)", "Évolution"),
-                 align = "lrrrrrl", caption = paste("Diagnostics, modèle", nom))
-}
-
-tableau_diag("distance")
-```
-
-### 5.2.1 distribution des résidus après filtrage
+### 5.2.1 Distribution des résidus après filtrage
 ```{r}
 # modèle
 reg_binaire_2 <- feols(
@@ -2229,7 +2095,23 @@ print(comparaison_prix)
 
 Le filtre de Tukey réduit fortement l’influence des valeurs extrêmes : le prix minimum passe de 61 € à 1 169 €/m² et le maximum de 17 683 € à 8 621 €/m². En revanche, la médiane et la moyenne évoluent très peu, ce qui montre que le filtre élimine principalement les valeurs atypiques sans modifier significativement le niveau général des prix.
 
-## 5.3 Estimation, 3 modèles, avant et après filtre
+## 5.3 Justification du cluster
+```{r}
+reg <- feols(log_prix_m2 ~ niveau + log_surface + type_local + dist_eau_km +
+               dist_centre_km + log_revenu_median | annee_mois + fe_spatial,
+             data = dvf_zone_2)
+
+etable(reg, reg, reg,
+       vcov = list(~carreau, ~carreau500, ~fe_spatial),
+       headers = c("Carreau 1 km", "Carreau 500 m", "fe_spatial (35)"))
+
+c(grappes_1km = n_distinct(dvf_zone_2$carreau),
+  grappes_500m = n_distinct(dvf_zone_2$carreau500),
+  grappes_fe = n_distinct(dvf_zone_2$fe_spatial))
+```
+
+
+## 5.4 Estimation, 3 modèles, avant et après filtre
 
 ```{r}
 
@@ -2318,7 +2200,7 @@ Les résultats obtenus après le filtre de Tukey sont très proches de ceux obse
 
 Ainsi, conformément à ce qui est indiqué dans le rapport, le filtrage modifie peu les résultats : les coefficients conservent globalement les mêmes signes et les mêmes ordres de grandeur. Il permet surtout de travailler sur un échantillon dont la distribution des prix est moins affectée par les valeurs extrêmes.
 
-## 5.4 Diagnostic des résidus
+## 5.5 Diagnostic des résidus
 
 ```{r, warning=FALSE}
 # Fonction de diagnostic des résidus
@@ -2487,7 +2369,7 @@ tableau_diag <- function(nom) {
 tableau_diag("distance")
 ```
 
-## 5.5 Tests de robustesse des spécifications spatiales
+## 5.6 Tests de robustesse des spécifications spatiales
 
 ```{r}
 
@@ -2520,7 +2402,7 @@ Pour le modèle 1, l'effet de la présence dans une zone inondable reste non sig
 
 Pour le modèle 2, le test de Wald (p-value = 0,1335) montre que les trois niveaux de risque (faible, moyen et fort) ne sont pas significatifs pris ensemble au seuil de 5 %.
 
-## 5.6 Vérification vif et comparaison résultats
+## 5.7 Vérification vif et comparaison résultats
 
 ```{r}
 x <- c("dans_zone_inond", "dist_inond_km", "niveau")
@@ -2537,7 +2419,7 @@ Les VIF indiquent une multicolinéarité globalement faible entre les variables,
 
 Les modèles sont estimés sans la variable de contrôle dist_centre_km, tout en conservant les autres variables de contrôle.
 
-### 5.6.1 Réestimmation sans la multicolinéarité
+### 5.7.1 Réestimmation sans la multicolinéarité
 
 ```{r}
 if (!"carreau" %in% names(dvf_zone)) {
@@ -2563,7 +2445,7 @@ iwalk(m, \(x, nom) print(etable(x$avant, x$apres,
 
 Les résultats restent globalement similaires avec ou sans la variable de contrôle dist_centre_km. Outre la significativité de certaines variables, les coefficients ne varient que très peu. Comme cette variable est significative dans deux de nos modèles, on décide de la garder.
 
-## 5.6.2 comparaison modèle plus fin
+## 5.7.2 Comparaison modèle plus fin
 
 ```{r}
 controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
@@ -2580,7 +2462,7 @@ etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
 ```
 attention pas le même nombre de données
 
-## 5.6.3 comparaison sans le revenu pour vérifier l'endogénéité
+## 5.7.3 Comparaison sans le revenu pour vérifier l'endogénéité
 ```{r}
 controles <- "log_surface + type_local + dist_eau_km + dist_centre_km"
 specs     <- c(binaire = "dans_zone_inond", niveau = "niveau", distance = "dist_inond_km")
@@ -2605,7 +2487,7 @@ etable(f("log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_m
 ```
 
 
-## 5.7 modèle d'analyse temporelle 
+## 5.8 Modèle d'analyse temporelle 
 ```{r}
 controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
 
@@ -2629,8 +2511,8 @@ etable(reg_expo_saison)
 wald(reg_expo_saison, keep = "saison")        
 ```
 
-## 5.8 modèle avec uniquement les logements en zone inondées / proche d'un cours d'eau
-### 5.8.1 biens proches de l'eau
+## 5.9 Modèle avec uniquement les logements en zone inondées / proche d'un cours d'eau
+### 5.9.1 Biens proches de l'eau
 ```{r}
 dvf_eau <- dvf_zone_2 |> filter(dist_eau_km <= 0.1)
 
@@ -2655,7 +2537,7 @@ etable(m_eau$binaire, m_eau$niveau, m_eau$distance,
 
 aucun changement majeur
 
-### 5.8.2 biens en zone et proches de la zone
+### 5.9.2 Biens en zone et proches de la zone
 ```{r}
 dvf_bande <- dvf_zone_2 |> filter(dist_inond_km <= 0.5)
 
@@ -2673,7 +2555,7 @@ etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
 ```
 seul changement majeur: dist inond qui devient positif (toujours non signifcatif), mias uniquement pour des seuils de 300 à 500m, après plus on s'écarte, plus on tend vers -0.025 (significatif)
 
-### 5.8.3 seulement biens exposés
+### 5.9.3 Seulement biens exposés
 ```{r}
 dvf_expo <- dvf_zone_2 |> filter(dans_zone_inond) |> mutate(niveau = droplevels(niveau))
 
