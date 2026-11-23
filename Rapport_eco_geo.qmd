@@ -2460,7 +2460,9 @@ m_bande <- map(specs, \(v) estimer(dvf_zone_2, v))
 etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
        headers = c("Binaire", "Catégories", "Distance"))
 ```
-attention pas le même nombre de données
+
+Le regroupement des erreurs-types à une échelle spatiale plus fine, correspondant à des carreaux de 500 mètres au lieu de 1 kilomètre, ne modifie quasiment pas les résultats. Les coefficients et leur significativité restent identiques, ce qui confirme la robustesse des estimations au choix de la taille des groupes utilisés pour le calcul des erreurs-types.
+
 
 ## 5.7.3 Comparaison sans le revenu pour vérifier l'endogénéité
 ```{r}
@@ -2476,7 +2478,8 @@ m_bande <- map(specs, \(v) estimer(dvf_zone_2, v))
 etable(m_bande$binaire, m_bande$niveau, m_bande$distance,
        headers = c("Binaire", "Catégories", "Distance"))
 ```
-mieux avec revenu, échantillon différent donc possible que l'écart soit issu des nouveaux individus
+Mieux avec revenu, échantillon différent donc possible que l'écart soit issu des nouveaux individus
+
 ```{r}
 dm <- dvf_zone_2 |> filter(!is.na(log_revenu_median))
 f  <- \(ctrl) feols(as.formula(paste0("log_prix_m2 ~ dans_zone_inond + ", ctrl, " | annee_mois + fe_spatial")),
@@ -2490,7 +2493,7 @@ etable(f("log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_m
 ## 5.8 Modèle d'analyse temporelle 
 ```{r}
 dvf_zone_2 <- dvf_zone_2 |>
-  mutate(mois_vente = lubridate::month(date_mutation))
+  mutate(mois_vente = factor(month(date_mutation), levels = 1:12))
 
 controles <- "log_surface + type_local + dist_eau_km + dist_centre_km + log_revenu_median"
 
@@ -2503,23 +2506,7 @@ etable(reg_saison, keep = "mois_vente")
 ```
 ```{r}
 dvf_zone_2 <- dvf_zone_2 |>
-  mutate(
-    mois_vente = lubridate::month(date_mutation),
-
-    saison = case_when(
-      mois_vente %in% c(12, 1, 2) ~ "Hiver",
-      mois_vente %in% c(3, 4, 5)  ~ "Printemps",
-      mois_vente %in% c(6, 7, 8)  ~ "Été",
-      mois_vente %in% c(9, 10, 11) ~ "Automne"
-    ),
-
-    saison = factor(saison,
-                    levels = c("Hiver", "Printemps", "Été", "Automne")),
-
-    expo = factor(dans_zone_inond,
-                  levels = c(FALSE, TRUE),
-                  labels = c("Non exposé", "Exposé"))
-  )
+  mutate(saison = factor(case_when(month(date_mutation) %in% c(12, 1, 2) ~ "Hiver",month(date_mutation) %in% c(3, 4, 5)  ~ "Printemps",month(date_mutation) %in% c(6, 7, 8)  ~ "Été",TRUE ~ "Automne"), levels = c("Hiver", "Printemps", "Été", "Automne")), expo = as.numeric(dans_zone_inond))
 
 # Par saison
 reg_expo_saison <- feols(
